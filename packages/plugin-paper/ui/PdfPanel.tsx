@@ -183,11 +183,22 @@ export function PdfPanel({
     [buildAnchor, emitAnchor, onSendMessage],
   );
 
-  // Ask / Branch currently share the direct-send path (the host only exposes
-  // onSendMessage from content panels); P5 can differentiate once a branch
-  // channel is exposed on ContentPanelProps.
+  // Ask: direct-send (host attaches the anchor to the created question node).
+  // Branch: same message, but forced into a new tree branch via the extended
+  // onSendMessage contract — the anchor rides along the same pending channel.
   const handleAsk = sendSelectionMessage;
-  const handleBranch = sendSelectionMessage;
+  const handleBranch = useCallback(
+    (text: string, meta?: PdfSelectionMeta) => {
+      const anchor = buildAnchor(text, meta);
+      if (anchor) emitAnchor(anchor);
+      const locParts: string[] = [];
+      if (anchor?.page) locParts.push(`第 ${anchor.page} 页`);
+      if (anchor?.section) locParts.push(anchor.section);
+      const loc = locParts.length > 0 ? `（${locParts.join(" · ")}）` : "";
+      onSendMessage?.(`「${text}」${loc}——请解释这段。`, { forceBranch: true });
+    },
+    [buildAnchor, emitAnchor, onSendMessage],
+  );
 
   const handleSave = useCallback(
     async (text: string, context?: string) => {
@@ -284,6 +295,26 @@ export function PdfPanel({
     viewerRef.current?.scrollToPage(page);
     setCurrentPage(page);
   }, []);
+
+  // ---- P5 jump-back: listen for "pi-tree:pdf-jump" from the host (tree
+  // node click with a pdf anchor) → jump to the page + highlight the quote.
+  useEffect(() => {
+    const onPdfJump = (event: Event) => {
+      const detail = (event as CustomEvent).detail as
+        | { page?: number; quote?: string }
+        | null
+        | undefined;
+      if (!detail || typeof detail.page !== "number" || detail.page < 1) return;
+      jumpToPage(detail.page);
+      if (detail.quote && detail.quote.trim()) {
+        viewerRef.current?.highlightQuote(detail.quote, detail.page);
+      } else {
+        viewerRef.current?.clearHighlight();
+      }
+    };
+    window.addEventListener("pi-tree:pdf-jump", onPdfJump);
+    return () => window.removeEventListener("pi-tree:pdf-jump", onPdfJump);
+  }, [jumpToPage]);
 
   const askSection = useCallback(
     (title: string) => {

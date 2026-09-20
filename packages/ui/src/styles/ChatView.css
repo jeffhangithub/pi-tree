@@ -1124,3 +1124,12 @@
   height: 1px;
   background: var(--pit-border, rgba(255, 255, 255, 0.08));
 }
+
+/* ── Anchor highlight (content-anchor jump-back) ── */
+.pit-anchor-highlight {
+  background: rgba(250, 204, 21, 0.4);
+  border-radius: 2px;
+  padding: 0 1px;
+  box-decoration-break: clone;
+  color: inherit;
+}

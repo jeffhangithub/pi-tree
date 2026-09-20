@@ -27,7 +27,10 @@ export function MessageBubble({
   useMermaid(contentRef, html);
 
   return (
-    <div className={`pit-chat-message pit-chat-message-${message.role}`}>
+    <div
+      className={`pit-chat-message pit-chat-message-${message.role}`}
+      data-message-id={message.id}
+    >
       {isAssistant && <div className="pit-chat-avatar">✦</div>}
       <div className="pit-chat-bubble">
         {isAssistant && message.toolSteps && message.toolSteps.length > 0 && (

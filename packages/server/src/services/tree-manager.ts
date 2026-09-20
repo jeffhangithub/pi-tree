@@ -14,6 +14,7 @@ import type {
   SessionState,
   TreeNodeView,
   BreadcrumbItem,
+  UnifiedAnchor,
 } from "@pi-tree/core";
 import type { ReaderConfig, SessionContext } from "@pi-tree/shared";
 import { DEFAULT_CONFIG } from "@pi-tree/shared";
@@ -573,12 +574,18 @@ export class TreeManager {
   async handleMessage(
     message: string,
     viewNodeId?: string | null,
-    opts?: { forceBranch?: boolean },
+    opts?: { forceBranch?: boolean; anchor?: UnifiedAnchor },
   ): Promise<SessionState & { response: string; usage?: import("@pi-tree/core").RawTokenUsage }> {
     const tree = this.buildTreeView();
     const effectiveViewNodeId = viewNodeId ?? tree.id ?? null;
 
     let didBranch = false;
+    // Capture the previous question node so the anchor only attaches when
+    // this send actually creates a NEW user-message node (no-agent fallbacks
+    // and test doubles record no entries).
+    const prevUserEntryId = opts?.anchor
+      ? this.piSession.findLastUserMessageEntry()
+      : null;
 
     if (effectiveViewNodeId) {
       if (opts?.forceBranch) {
@@ -608,6 +615,11 @@ export class TreeManager {
     const { response, usage } = await this.piSession.sendMessage(
       this.wrapReplyLanguageInstruction(message),
     );
+
+    // P5: attach the pending anchor to the question node this send created.
+    if (opts?.anchor) {
+      this.attachAnchorToNewUserNode(opts.anchor, prevUserEntryId);
+    }
 
     // After any branching (explicit or auto), redirect scope to the new
     // branch so follow-up messages continue linearly instead of
@@ -641,12 +653,18 @@ export class TreeManager {
       onCompaction?: (event: { type: string; reason: string }) => Promise<void>;
       onDone: (result: Record<string, unknown>) => Promise<void>;
     },
-    opts?: { forceBranch?: boolean; signal?: AbortSignal },
+    opts?: { forceBranch?: boolean; signal?: AbortSignal; anchor?: UnifiedAnchor },
   ): Promise<void> {
     const tree = this.buildTreeView();
     const effectiveViewNodeId = viewNodeId ?? tree.id ?? null;
 
     let didBranch = false;
+    // Capture the previous question node so the anchor only attaches when
+    // this send actually creates a NEW user-message node (no-agent fallbacks
+    // and test doubles record no entries).
+    const prevUserEntryId = opts?.anchor
+      ? this.piSession.findLastUserMessageEntry()
+      : null;
 
     if (effectiveViewNodeId) {
       if (opts?.forceBranch) {
@@ -685,6 +703,12 @@ export class TreeManager {
       opts?.signal,
     );
 
+    // P5: attach the pending anchor to the question node this send created
+    // (before onDone so the returned tree already carries it).
+    if (opts?.anchor) {
+      this.attachAnchorToNewUserNode(opts.anchor, prevUserEntryId);
+    }
+
     // After any branching (explicit or auto), redirect scope to the new
     // branch so follow-up messages continue linearly.
     let scopeNodeId = viewNodeId;
@@ -702,6 +726,21 @@ export class TreeManager {
       response,
       usage,
     });
+  }
+
+  /**
+   * Attach a pending anchor to the user-message node the just-completed
+   * send created. No-op when no new question node appeared (e.g. the
+   * no-agent fallback, which records no entries).
+   */
+  private attachAnchorToNewUserNode(
+    anchor: UnifiedAnchor,
+    prevUserEntryId: string | null,
+  ): void {
+    const entryId = this.piSession.findLastUserMessageEntry();
+    if (entryId && entryId !== prevUserEntryId) {
+      this.piSession.setAnchor(entryId, anchor);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -942,7 +981,13 @@ export class TreeManager {
       summary: node.summary,
       children: node.children.map((c) => this.annotatedToView(c)),
       isCurrent: node.isCurrent,
+      ...(node.anchor ? { anchor: node.anchor } : {}),
     };
+  }
+
+  /** All unified anchors in this session, keyed by tree node (entry) id. */
+  getAnchorMap(): Map<string, UnifiedAnchor> {
+    return this.piSession.getAllAnchors();
   }
 
   // ---------------------------------------------------------------------------

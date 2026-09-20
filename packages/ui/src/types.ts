@@ -5,7 +5,8 @@ import type { Source } from "@pi-tree/shared";
 export interface ContentPanelProps {
   sourceId: string;
   onDefine?: (term: string, context?: string) => void;
-  onSendMessage?: (message: string) => void;
+  /** Send a chat message; pass { forceBranch: true } to open a new branch. */
+  onSendMessage?: (message: string, opts?: { forceBranch?: boolean }) => void;
 }
 
 /** Props passed to plugin add-source form components by the AddSourceModal */

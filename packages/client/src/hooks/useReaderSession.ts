@@ -12,6 +12,7 @@ import type {
   TreeNodeView,
   BranchOption,
   ToolStep,
+  UnifiedAnchor,
 } from "@pi-tree/core/types";
 import type {
   Source,
@@ -145,6 +146,27 @@ export function useReaderSession(
   // When set, the next message is routed to the fork scope (parent level)
   // instead of the current viewNodeId, so branching happens at the right level.
   const pendingForkScopeRef = useRef<string | null>(null);
+
+  // Pending unified anchor — set by content panels/selections (P5) right
+  // before a send, consumed by the next handleSendMessage. The PDF panel
+  // dispatches "pi-tree:pdf-anchor" window events; the Reader's chat
+  // selection toolbar sets content anchors via setPendingAnchor().
+  const pendingAnchorRef = useRef<UnifiedAnchor | null>(null);
+
+  const setPendingAnchor = useCallback((anchor: UnifiedAnchor | null) => {
+    pendingAnchorRef.current = anchor;
+  }, []);
+
+  useEffect(() => {
+    const onPdfAnchor = (event: Event) => {
+      const detail = (event as CustomEvent).detail as UnifiedAnchor | null | undefined;
+      if (detail && (detail.kind === "pdf" || detail.kind === "content")) {
+        pendingAnchorRef.current = detail;
+      }
+    };
+    window.addEventListener("pi-tree:pdf-anchor", onPdfAnchor);
+    return () => window.removeEventListener("pi-tree:pdf-anchor", onPdfAnchor);
+  }, []);
 
   // Whether the user is still following the live stream (hasn't scrolled away
   // to read something else). Reported by ChatView via handleFollowChange.
@@ -353,7 +375,13 @@ export function useReaderSession(
 
   /** Start a message stream now (assumes no stream is active for the session). */
   const beginSend = useCallback(
-    (message: string, sendingNodeId: string | null, forceBranch: boolean, fromQueue: boolean) => {
+    (
+      message: string,
+      sendingNodeId: string | null,
+      forceBranch: boolean,
+      fromQueue: boolean,
+      anchor?: UnifiedAnchor,
+    ) => {
       if (!userId) return;
       const sid = sessionIdRef.current;
       if (sid === null) return;
@@ -389,9 +417,17 @@ export function useReaderSession(
         setStreamingContent("");
       }
 
+      const streamOpts =
+        forceBranch || anchor
+          ? {
+              ...(forceBranch ? { forceBranch: true } : {}),
+              ...(anchor ? { anchor } : {}),
+            }
+          : undefined;
+
       startMessageStream(userId, source.id, sid, message, sendingNodeId, (updatedTree) => {
         setTree(updatedTree);
-      }, forceBranch ? { forceBranch: true } : undefined).catch((err) => {
+      }, streamOpts).catch((err) => {
         console.error("Stream start failed:", err);
       }).finally(() => {
         // The promise settles when the stream completes (or fails to start).
@@ -406,10 +442,15 @@ export function useReaderSession(
   );
 
   const handleSendMessage = useCallback(
-    async (message: string, opts?: { forceBranch?: boolean }) => {
+    async (message: string, opts?: { forceBranch?: boolean; anchor?: UnifiedAnchor }) => {
       if (!userId) return;
       const sid = sessionIdRef.current;
       if (sid === null) return;
+
+      // Consume the pending anchor (PDF selection event or chat-selection
+      // toolbar) — one-shot per send. An explicit opts.anchor wins.
+      const anchor = opts?.anchor ?? pendingAnchorRef.current ?? undefined;
+      pendingAnchorRef.current = null;
 
       // Use fork scope if set (routes message to the fork level, not the viewed scope)
       const forkScope = pendingForkScopeRef.current;
@@ -441,11 +482,12 @@ export function useReaderSession(
           sendingNodeId,
           forceBranch: forceBranch || undefined,
           chainToResult: chainToResult || undefined,
+          anchor,
         });
         return;
       }
 
-      beginSend(message, sendingNodeId, forceBranch, false);
+      beginSend(message, sendingNodeId, forceBranch, false, anchor);
     },
     [userId, source.id, beginSend, enqueueSend],
   );
@@ -463,7 +505,7 @@ export function useReaderSession(
       // Chained follow-ups continue from where the last response landed
       // (falling back to the node captured at enqueue time, e.g. after a stop).
       const chained = next.chainToResult ? lastResultNodeIdRef.current[key] : undefined;
-      beginSend(next.message, chained !== undefined ? chained : next.sendingNodeId, next.forceBranch ?? false, true);
+      beginSend(next.message, chained !== undefined ? chained : next.sendingNodeId, next.forceBranch ?? false, true, next.anchor);
     }
   }, [streams, queuedSends, userId, sessionId, source.id, popQueuedSend, beginSend]);
 
@@ -854,6 +896,7 @@ export function useReaderSession(
     queuedSends: sessionQueuedSends,
     handleCancelQueued,
     handleSendMessage,
+    setPendingAnchor,
     handleStopGeneration: useCallback(() => {
       const sid = sessionIdRef.current;
       if (sid === null) return;

@@ -29,6 +29,7 @@ import type {
   TextLayer as TextLayerType,
 } from "pdfjs-dist";
 import { loadOutline, loadPdf, TextLayer } from "./pdfjs.js";
+import { computeHighlightRects, type TextSpanMetrics } from "./highlight.js";
 import type {
   PdfOutlineItem,
   PdfSelectionMeta,
@@ -85,6 +86,8 @@ export default function PdfViewer({
   const [zoom, setZoom] = useState(1);
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
+  /** P5 jump-back highlight request: {page, quote} to overlay on the text layer. */
+  const [highlight, setHighlight] = useState<{ page: number; quote: string; nonce: number } | null>(null);
 
   // ---- Document lifecycle (StrictMode-safe: cancelled flag + cached doc) --
   useEffect(() => {
@@ -93,6 +96,7 @@ export default function PdfViewer({
     setPages([]);
     setLoadError(null);
     setCurrentPage(1);
+    setHighlight(null); // stale highlight from a previous source must not linger
 
     loadPdf(url)
       .then(async (loaded) => {
@@ -203,6 +207,13 @@ export default function PdfViewer({
       getScale() {
         return scale;
       },
+      highlightQuote(quote: string, page: number) {
+        if (!quote.trim() || !Number.isFinite(page) || page < 1) return;
+        setHighlight({ page, quote, nonce: Date.now() });
+      },
+      clearHighlight() {
+        setHighlight(null);
+      },
     }),
     [scale],
   );
@@ -273,6 +284,7 @@ export default function PdfViewer({
               info={info}
               scale={scale}
               section={sectionForPage(info.pageNumber)}
+              highlightQuote={highlight && highlight.page === info.pageNumber ? highlight.quote : null}
               registerRef={registerRef}
               onTextStatus={onPageTextStatus}
             />
@@ -302,6 +314,8 @@ interface PdfPageProps {
   info: PageInfo;
   scale: number;
   section: string;
+  /** Quote to highlight on this page (P5 jump-back), or null. */
+  highlightQuote: string | null;
   registerRef: (page: number, el: HTMLDivElement | null) => void;
   onTextStatus?: (page: number, hasText: boolean) => void;
 }
@@ -311,17 +325,63 @@ function PdfPage({
   info,
   scale,
   section,
+  highlightQuote,
   registerRef,
   onTextStatus,
 }: PdfPageProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
+  const highlightOverlayRef = useRef<HTMLDivElement>(null);
   const [shouldRender, setShouldRender] = useState(false);
   const [renderFailed, setRenderFailed] = useState(false);
 
   const width = Math.max(1, Math.floor(info.width * scale));
   const height = Math.max(1, Math.floor(info.height * scale));
+
+  /**
+   * Overlay the current highlight quote on the rendered text layer.
+   * Metrics come from the absolutely-positioned text-layer spans (offsets
+   * are relative to the page wrapper), so canvas and overlay stay aligned.
+   */
+  const applyHighlightOverlay = useCallback(() => {
+    const container = highlightOverlayRef.current;
+    const layer = textLayerRef.current;
+    if (!container || !layer) return;
+    container.replaceChildren();
+
+    const quote = highlightQuoteRef.current;
+    if (!quote || !quote.trim()) return;
+
+    const spans = Array.from(layer.querySelectorAll("span")).filter(
+      (s) => (s.textContent ?? "").trim().length > 0,
+    ) as HTMLElement[];
+    if (spans.length === 0) return;
+
+    const metrics: TextSpanMetrics[] = spans.map((s) => ({
+      text: s.textContent ?? "",
+      top: s.offsetTop,
+      left: s.offsetLeft,
+      width: s.offsetWidth,
+      height: s.offsetHeight,
+    }));
+
+    for (const rect of computeHighlightRects(metrics, quote)) {
+      const div = document.createElement("div");
+      div.className = "pdf-page-highlight";
+      div.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;`;
+      container.appendChild(div);
+    }
+  }, []);
+
+  // Latest highlight request, readable from the render effect without
+  // re-triggering a full page re-render on every highlight change.
+  const highlightQuoteRef = useRef<string | null>(highlightQuote);
+  useEffect(() => {
+    highlightQuoteRef.current = highlightQuote;
+    applyHighlightOverlay();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightQuote, applyHighlightOverlay]);
 
   // Register for parent TOC scrollToPage.
   useEffect(() => {
@@ -384,6 +444,7 @@ function PdfPage({
         await Promise.all([renderTask.promise, textLayer.render()]);
         if (cancelled) return;
         setRenderFailed(false);
+        applyHighlightOverlay();
         const hasText =
           textLayer.textContentItemsStr.join("").trim().length > 0;
         onTextStatus?.(info.pageNumber, hasText);
@@ -401,10 +462,11 @@ function PdfPage({
       renderTask?.cancel();
       textLayer?.cancel();
       textLayerDiv.replaceChildren();
+      highlightOverlayRef.current?.replaceChildren();
       canvas.width = 0;
       canvas.height = 0;
     };
-  }, [doc, info.pageNumber, scale, shouldRender, onTextStatus]);
+  }, [doc, info.pageNumber, scale, shouldRender, onTextStatus, applyHighlightOverlay]);
 
   return (
     <div
@@ -416,6 +478,7 @@ function PdfPage({
     >
       <canvas ref={canvasRef} className="pdf-page-canvas" />
       <div ref={textLayerRef} className="pdf-page-text-layer textLayer" />
+      <div ref={highlightOverlayRef} className="pdf-page-highlights" />
       {renderFailed && (
         <div className="pdf-page-render-error">此页渲染失败</div>
       )}

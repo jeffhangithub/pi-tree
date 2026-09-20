@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { TreeNodeView } from "@pi-tree/core/types";
-import { buildTooltip } from "../tree-utils";
+import { buildTooltip, findNode } from "../tree-utils";
 
 /** Shorthand to build a TreeNodeView */
 function makeNode(label: string, summary?: string): TreeNodeView {
@@ -87,5 +87,56 @@ describe("buildTooltip", () => {
     // Empty summary should not add separator
     // Note: empty string is falsy so summary check fails
     expect(tip).toBe(label);
+  });
+});
+
+describe("findNode", () => {
+  const tree: TreeNodeView = {
+    id: "root",
+    parentId: null,
+    label: "source",
+    status: "active",
+    messageCount: 0,
+    isCurrent: false,
+    children: [
+      {
+        id: "q1",
+        parentId: "root",
+        label: "question one",
+        status: "active",
+        messageCount: 1,
+        isCurrent: false,
+        anchor: { kind: "pdf", page: 3, quote: "anchor text", section: "Intro" },
+        children: [
+          {
+            id: "a1",
+            parentId: "q1",
+            label: "✦ answer",
+            status: "active",
+            messageCount: 0,
+            isCurrent: false,
+            children: [],
+          },
+        ],
+      },
+    ],
+  };
+
+  it("finds the root", () => {
+    expect(findNode(tree, "root")?.id).toBe("root");
+  });
+
+  it("finds nested nodes at any depth", () => {
+    expect(findNode(tree, "a1")?.id).toBe("a1");
+    expect(findNode(tree, "q1")?.label).toBe("question one");
+  });
+
+  it("carries the node anchor for jump-back dispatch", () => {
+    const node = findNode(tree, "q1");
+    expect(node?.anchor).toEqual({ kind: "pdf", page: 3, quote: "anchor text", section: "Intro" });
+  });
+
+  it("returns null for unknown ids", () => {
+    expect(findNode(tree, "nope")).toBeNull();
   });
 });

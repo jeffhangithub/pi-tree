@@ -319,3 +319,19 @@
   font-size: var(--pit-text-xs, 0.75rem);
   color: var(--pit-danger-text, #c0392b);
 }
+
+/* ── Anchor highlight overlay (P5 pdf jump-back) ── */
+.pdf-page-highlights {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.pdf-page-highlight {
+  position: absolute;
+  background: rgba(255, 200, 40, 0.35);
+  mix-blend-mode: multiply;
+  border-radius: 2px;
+  box-shadow: inset 0 -2px 0 rgba(255, 170, 0, 0.55);
+}

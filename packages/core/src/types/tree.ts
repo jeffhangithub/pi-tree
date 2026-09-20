@@ -19,6 +19,8 @@ export interface TreeNodeView {
   children: TreeNodeView[];
   /** Whether this is the currently active node */
   isCurrent: boolean;
+  /** Unified anchor attached to this (question) node, when present. */
+  anchor?: UnifiedAnchor;
 }
 
 // ---------------------------------------------------------------------------
@@ -73,6 +75,37 @@ export interface ContentAnchor {
   /** The heading text from the outline */
   outlineHeading?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Unified Anchor — the P5 dual-anchor model (docs/dev/DEV_PLAN.zh.md Phase 5).
+// Every question node can carry ONE anchor:
+//   - pdf:     a text selection in the source PDF  { page, quote, section }
+//   - content: a text selection in an AI answer   { nodeId, quote }
+// Stored as a Pi SDK custom entry (session JSONL), exposed on TreeNodeView,
+// and exported through the portable reading record.
+// ---------------------------------------------------------------------------
+
+/** Source-text anchor: a selection inside the rendered PDF. */
+export interface PdfNodeAnchor {
+  kind: "pdf";
+  /** 1-based PDF page number. */
+  page: number;
+  /** The exact selected source text. */
+  quote: string;
+  /** Section title containing the selection ("" when unknown). */
+  section: string;
+}
+
+/** Conversation-content anchor: a selection inside an AI answer. */
+export interface ContentNodeAnchor {
+  kind: "content";
+  /** Entry id of the answer message that contained the selection. */
+  nodeId: string;
+  /** The exact selected answer fragment. */
+  quote: string;
+}
+
+export type UnifiedAnchor = PdfNodeAnchor | ContentNodeAnchor;
 
 // ---------------------------------------------------------------------------
 // Session State — full state snapshot for a reading session

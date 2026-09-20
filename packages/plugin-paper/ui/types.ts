@@ -44,6 +44,10 @@ export interface PdfAnchor {
 export interface PdfViewerHandle {
   scrollToPage: (page: number) => void;
   getScale: () => number;
+  /** Highlight `quote` on `page` (text-layer metric matching + overlay). */
+  highlightQuote: (quote: string, page: number) => void;
+  /** Remove the current highlight overlay. */
+  clearHighlight: () => void;
 }
 
 /** Section from the server analysis files (toc.json + page-index.json),

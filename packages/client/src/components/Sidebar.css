@@ -59,6 +59,25 @@
   color: var(--text-primary);
 }
 
+.sidebar-export-record {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.sidebar-export-record:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 /* ── Help Tooltip ── */
 
 .sidebar-help-wrapper {

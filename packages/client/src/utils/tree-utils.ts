@@ -16,3 +16,16 @@ export function buildTooltip(node: TreeNodeView): string | undefined {
   }
   return tip;
 }
+
+/**
+ * Find a tree node by ID (DFS). Local copy of @pi-tree/core's findNode —
+ * keeps the client bundle free of the core session machinery.
+ */
+export function findNode(tree: TreeNodeView, nodeId: string): TreeNodeView | null {
+  if (tree.id === nodeId) return tree;
+  for (const child of tree.children ?? []) {
+    const found = findNode(child, nodeId);
+    if (found) return found;
+  }
+  return null;
+}

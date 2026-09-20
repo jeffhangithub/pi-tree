@@ -3,7 +3,7 @@
  * All calls go through the Vite dev proxy → localhost:3847.
  */
 
-import type { SessionState, TreeNodeView } from "@pi-tree/core/types";
+import type { SessionState, TreeNodeView, UnifiedAnchor } from "@pi-tree/core/types";
 import type {
   Source,
   SourceOutline,
@@ -455,6 +455,21 @@ export function exportSessionUrl(
 }
 
 /**
+ * Fetch the portable reading record (P5): the session tree flattened into
+ * `{ source, nodes: [{ id, parentId, question, answer, anchor }] }`.
+ */
+export async function fetchReadingRecord(
+  sessionId: number,
+): Promise<import("@pi-tree/core").ReadingRecord> {
+  const res = await fetch(`${API}/sessions/${sessionId}/reading-record`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to fetch reading record: ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
  * Import a session from a jsonl export bundle. Returns the created session
  * (its sourceId may differ from the page it was imported on).
  */
@@ -559,11 +574,12 @@ export async function sendMessage(
   sessionId: number,
   message: string,
   viewNodeId?: string | null,
+  anchor?: UnifiedAnchor,
 ): Promise<SessionState & { response: string }> {
   const res = await fetch(`${API}/session/message`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId, sourceId, sessionId, message, viewNodeId }),
+    body: JSON.stringify({ userId, sourceId, sessionId, message, viewNodeId, ...(anchor ? { anchor } : {}) }),
   });
   if (!res.ok) throw new Error(`Failed to send message: ${res.status}`);
   return res.json();
@@ -587,11 +603,12 @@ export async function sendMessageStreaming(
     onError: (error: Error) => void;
   },
   signal?: AbortSignal,
-  opts?: { sessionKey?: string; forceBranch?: boolean },
+  opts?: { sessionKey?: string; forceBranch?: boolean; anchor?: UnifiedAnchor },
 ): Promise<void> {
   const body: Record<string, unknown> = { userId, sourceId, sessionId, message, viewNodeId };
   if (opts?.sessionKey) body.sessionKey = opts.sessionKey;
   if (opts?.forceBranch) body.forceBranch = true;
+  if (opts?.anchor) body.anchor = opts.anchor;
 
   const res = await fetch(`${API}/session/message/stream`, {
     method: "POST",

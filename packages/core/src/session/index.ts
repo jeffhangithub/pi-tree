@@ -26,3 +26,14 @@ export {
   type AssistantNodeResult,
   type MeaningfulChild,
 } from "./conversation-tree.js";
+export {
+  normalizeUnifiedAnchor,
+  isPdfNodeAnchor,
+  isContentNodeAnchor,
+} from "./anchor.js";
+export {
+  buildReadingRecord,
+  type ReadingRecord,
+  type ReadingRecordNode,
+  type MessageContentLike,
+} from "./reading-record.js";

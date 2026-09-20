@@ -7,7 +7,7 @@ export { Breadcrumb } from "./Breadcrumb.js";
 export { ToolCallIndicator } from "./ToolCallIndicator.js";
 export { ToolSteps } from "./ToolSteps.js";
 export { ModelPicker, type ModelInfo } from "./ModelPicker.js";
-export { SelectionToolbar } from "./SelectionToolbar.js";
+export { SelectionToolbar, type SelectionMeta } from "./SelectionToolbar.js";
 export { SlashCommandMenu, type SlashCommand, type SlashCommandResult } from "./SlashCommandMenu.js";
 export { SourceCardMenu, FinishedBadge, type SourceCardMenuProps } from "./SourceCardMenu.js";
 

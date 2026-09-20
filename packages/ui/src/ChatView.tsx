@@ -15,6 +15,118 @@ const NEAR_BOTTOM_THRESHOLD = 300;
 /** Distance (px) from the bottom within which a user scroll re-engages follow */
 const FOLLOW_REENGAGE_THRESHOLD = 40;
 
+// ---------------------------------------------------------------------------
+// Content-anchor highlight helpers (DOM text matching + <mark> wrapping)
+// ---------------------------------------------------------------------------
+
+/** Unwrap all anchor highlight marks in the messages container. */
+function clearAnchorHighlights(container: HTMLElement | null): void {
+  container?.querySelectorAll("mark.pit-anchor-highlight").forEach((mark) => {
+    const parent = mark.parentNode;
+    if (!parent) return;
+    while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+    parent.removeChild(mark);
+  });
+}
+
+/**
+ * Map a range in whitespace-normalized text back to raw string offsets.
+ * Whitespace runs collapse to a single character position; the returned
+ * range is extended through the trailing whitespace run so the mark covers
+ * the whole visual gap.
+ */
+function mapNormRange(
+  raw: string,
+  normFrom: number,
+  normTo: number,
+): { rawFrom: number; rawTo: number } {
+  const rawToNorm = new Array<number>(raw.length + 1);
+  let normIdx = 0;
+  let prevWs = false;
+  for (let i = 0; i < raw.length; i++) {
+    rawToNorm[i] = normIdx;
+    const ws = /\s/.test(raw[i]);
+    if (!(ws && prevWs)) normIdx++;
+    prevWs = ws;
+  }
+  rawToNorm[raw.length] = normIdx;
+
+  let rawFrom = 0;
+  while (rawFrom < raw.length && rawToNorm[rawFrom] < normFrom) rawFrom++;
+  let rawTo = rawFrom;
+  while (rawTo < raw.length && rawToNorm[rawTo] < normTo) rawTo++;
+  while (rawTo < raw.length && /\s/.test(raw[rawTo])) rawTo++;
+  return { rawFrom, rawTo };
+}
+
+/**
+ * Highlight the first occurrence of `quote` inside `root` by wrapping the
+ * matching text nodes in a single <mark class="pit-anchor-highlight">.
+ * Matching is whitespace-normalized, and text nodes are joined with single
+ * spaces (rendered markdown fragments a quote across inline elements like
+ * **bold** and links). Returns true when found.
+ */
+function highlightQuoteInElement(root: HTMLElement, quote: string): boolean {
+  const norm = (s: string) => s.replace(/\s+/g, " ");
+  const target = norm(quote);
+  if (!target || target.length > 2000) return false;
+
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const textNodes: Text[] = [];
+  let current: Node | null;
+  while ((current = walker.nextNode())) {
+    const t = current as Text;
+    if (t.textContent && t.textContent.trim()) textNodes.push(t);
+  }
+  if (textNodes.length === 0) return false;
+
+  const joined = textNodes.map((t) => norm(t.textContent ?? "")).join(" ");
+  const idx = joined.indexOf(target);
+  if (idx < 0) return false;
+  const end = idx + target.length;
+
+  const affected: { node: Text; rawFrom: number; rawTo: number }[] = [];
+  let pos = 0;
+  for (const t of textNodes) {
+    const raw = t.textContent ?? "";
+    const segStart = pos;
+    const segEnd = pos + norm(raw).length;
+    const from = Math.max(segStart, idx);
+    const to = Math.min(segEnd, end);
+    if (to > from) {
+      const mapped = mapNormRange(raw, from - segStart, to - segStart);
+      affected.push({ node: t, rawFrom: mapped.rawFrom, rawTo: mapped.rawTo });
+    }
+    pos = segEnd + 1;
+    if (pos > end) break;
+  }
+  if (affected.length === 0) return false;
+
+  let mark: HTMLElement | null = null;
+  for (const { node: t, rawFrom, rawTo } of affected) {
+    const raw = t.textContent ?? "";
+    const before = raw.slice(0, rawFrom);
+    const middle = raw.slice(rawFrom, rawTo);
+    const after = raw.slice(rawTo);
+    const parent = t.parentNode;
+    if (!parent || !middle) continue;
+    if (!mark) {
+      mark = document.createElement("mark");
+      mark.className = "pit-anchor-highlight";
+      if (before) parent.insertBefore(document.createTextNode(before), t);
+      mark.appendChild(document.createTextNode(middle));
+      parent.insertBefore(mark, t);
+      if (after) parent.insertBefore(document.createTextNode(after), t);
+    } else {
+      if (before) parent.insertBefore(document.createTextNode(before), t);
+      mark.appendChild(document.createTextNode(middle));
+      if (after) parent.insertBefore(document.createTextNode(after), t);
+    }
+    parent.removeChild(t);
+  }
+  return true;
+}
+
 interface ChatViewProps {
   messages: ChatMessage[];
   isLoading: boolean;
@@ -94,6 +206,12 @@ interface ChatViewProps {
   onSlashCommand?: (command: string, args: string, context: {
     lastAssistantMessage?: string;
   }) => void | SlashCommandResult | Promise<void | SlashCommandResult>;
+  /**
+   * Jump request for a content anchor: scroll to the message with `nodeId`
+   * (expanding ancestor context if needed) and highlight `quote` inside it.
+   * `nonce` lets the host re-trigger the same node/quote pair.
+   */
+  contentJump?: { nodeId: string; quote: string; nonce: number } | null;
 }
 
 export function ChatView({
@@ -131,6 +249,7 @@ export function ChatView({
   onCancelQueued,
   slashCommands,
   onSlashCommand,
+  contentJump,
 }: ChatViewProps) {
   const [input, setInput] = useState("");
   const [quotedText, setQuotedText] = useState<string | null>(null);
@@ -310,10 +429,55 @@ export function ChatView({
   useEffect(() => {
     if (scrollTopTrigger !== scrollTopTriggerRef.current) {
       scrollTopTriggerRef.current = scrollTopTrigger;
+      clearAnchorHighlights(messagesContainerRef.current);
       messagesContainerRef.current?.scrollTo({ top: 0, behavior: "smooth" });
       setShowAncestors(false); // Collapse ancestors on navigation
     }
   }, [scrollTopTrigger]);
+
+  // Content-anchor jump: locate the referenced message (expanding ancestor
+  // context when it lives in parentContext), scroll to it, and highlight the
+  // quoted fragment. Retries briefly while the scoped messages load.
+  const handledJumpNonceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!contentJump) return;
+    if (handledJumpNonceRef.current === contentJump.nonce) return;
+
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const { nodeId, quote, nonce } = contentJump;
+    let cancelled = false;
+    let attempts = 0;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+
+    const tryLocate = () => {
+      if (cancelled) return;
+      const el = container.querySelector(
+        `[data-message-id="${CSS.escape(nodeId)}"]`,
+      ) as HTMLElement | null;
+      if (el) {
+        handledJumpNonceRef.current = nonce;
+        clearAnchorHighlights(container);
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        // Highlight inside the message CONTENT (not tool steps/avatars).
+        const contentEl =
+          el.querySelector<HTMLElement>(".pit-chat-content") ?? el;
+        highlightQuoteInElement(contentEl, quote);
+        return;
+      }
+      if (!showAncestors) setShowAncestors(true);
+      attempts++;
+      if (attempts < 25) timers.push(setTimeout(tryLocate, 80));
+      else handledJumpNonceRef.current = nonce; // genuinely absent — stop
+    };
+    tryLocate();
+
+    return () => {
+      cancelled = true;
+      timers.forEach(clearTimeout);
+    };
+  }, [contentJump, messages, parentContext, showAncestors]);
 
   // Auto-scroll lifecycle: reset auto-scroll only when a genuinely new
   // interaction begins (isLoading goes false→true), not on each turn boundary.

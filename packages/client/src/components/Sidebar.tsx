@@ -25,11 +25,13 @@ interface SidebarProps {
   onRenameNode?: (nodeId: string, newLabel: string) => void;
   /** Export the branch rooted at this node as a standalone HTML file */
   onExportNode?: (nodeId: string) => void;
+  /** Export the portable reading record (flattened JSON with anchors) */
+  onExportReadingRecord?: () => void;
   isOpen: boolean;
   onClose: () => void;
 }
 
-export function Sidebar({ tree, viewNodeId, generatingNodeIds, onNavigate, onDeleteNode, onRenameNode, onExportNode, isOpen, onClose }: SidebarProps) {
+export function Sidebar({ tree, viewNodeId, generatingNodeIds, onNavigate, onDeleteNode, onRenameNode, onExportNode, onExportReadingRecord, isOpen, onClose }: SidebarProps) {
   return (
     <aside className={`sidebar ${isOpen ? "open" : ""}`} data-testid="sidebar">
       <div className="sidebar-header">
@@ -48,6 +50,16 @@ export function Sidebar({ tree, viewNodeId, generatingNodeIds, onNavigate, onDel
             </div>
           </span>
         </span>
+        {onExportReadingRecord && (
+          <button
+            className="sidebar-export-record"
+            onClick={onExportReadingRecord}
+            aria-label="Export reading record"
+            title="Export reading record (JSON)"
+          >
+            <Download size={14} />
+          </button>
+        )}
         <button className="sidebar-close" onClick={onClose} aria-label="Close panel" title="Close panel">
           <X size={14} />
         </button>

@@ -6,7 +6,7 @@ import { useSourceProcessing } from "../hooks/useSourceProcessing";
 import { usePanelLayout } from "../hooks/usePanelLayout";
 import { useDictionary } from "../hooks/useDictionary";
 import { useReaderSession } from "../hooks/useReaderSession";
-import { ChatView, Breadcrumb, SelectionToolbar, type ModelInfo, type SlashCommand } from "@pi-tree/ui";
+import { ChatView, Breadcrumb, SelectionToolbar, type ModelInfo, type SlashCommand, type SelectionMeta } from "@pi-tree/ui";
 import { SourceSetupState } from "./SourceSetupState";
 import { SourceSettingsModal } from "./SourceSettingsModal";
 import { Sidebar } from "./Sidebar";
@@ -15,8 +15,9 @@ import { DictQuickCardStack } from "./DictionaryPanel";
 import { SessionUsageBadge } from "./SessionUsageBadge";
 import { NavMenu } from "./NavMenu";
 
-import { fetchModels, fetchSettings, updateSession, viewScope, createMemo, searchMemos, fetchMemos, enrichMemo, fetchHasAnalysis, summarizeBranch, exportSessionUrl, REPLY_LANGUAGES, REPLY_LANGUAGE_LABELS, type ReplyLanguage } from "../api";
+import { fetchModels, fetchSettings, updateSession, viewScope, createMemo, searchMemos, fetchMemos, enrichMemo, fetchHasAnalysis, summarizeBranch, exportSessionUrl, fetchReadingRecord, REPLY_LANGUAGES, REPLY_LANGUAGE_LABELS, type ReplyLanguage } from "../api";
 import { getBranchesCollapsed, getShowUsage, setShowUsage as saveShowUsage } from "../utils/preferences";
+import { findNode } from "../utils/tree-utils";
 import { PanelLeft, PanelRight, Layers, Settings, Zap, StickyNote, Search, FileText, Plus } from "lucide-react";
 import { useAddSource } from "../AddSourceContext";
 import { getSourceTypeConfig } from "../source-types";
@@ -51,6 +52,10 @@ export function Reader() {
   // new branch" when auto-nav was suppressed because the user was reading).
   const [toast, setToast] = useState<{ message: string; nodeId?: string | null } | null>(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Content-anchor jump request for ChatView (scroll + highlight). The nonce
+  // lets the same node/quote pair be re-triggered across tree clicks.
+  const [contentJump, setContentJump] = useState<{ nodeId: string; quote: string; nonce: number } | null>(null);
   const showToast = useCallback((next: { message: string; nodeId?: string | null }, durationMs: number) => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     setToast(next);
@@ -262,20 +267,53 @@ export function Reader() {
     }
   }, [userId, source.id, source.title, session.sessionId, session.viewNodeId, session.breadcrumb, showMemoToast, panel]);
 
-  // Wrap SelectionToolbar as a render prop for the UI package's ChatView
+  // Stable bindings for the session callbacks used below — keeps the
+  // exhaustive-deps analysis on explicit values instead of the `session`
+  // object (whose methods would otherwise drag the whole object in).
+  const sessionTree = session.tree;
+  const sessionHandleNavigate = session.handleNavigate;
+  const sessionSetPendingAnchor = session.setPendingAnchor;
+
+  // Wrap SelectionToolbar as a render prop for the UI package's ChatView.
+  // Selections over a rendered message carry { nodeId } metadata → content
+  // anchors ({kind:"content", nodeId, quote}) are staged for the next send.
   const renderSelectionToolbar = useCallback(
     (ctx: {
       containerRef: React.RefObject<HTMLDivElement | null>;
       onDefine: (term: string, context?: string) => void;
       onAsk: (text: string) => void;
       onBranch: (text: string) => void;
-    }) => (
-      <SelectionToolbar
-        containerRef={ctx.containerRef}
-        onDefine={ctx.onDefine}
-        onAsk={ctx.onAsk}
-        onBranch={ctx.onBranch}
-        onSave={async (text, context) => {
+    }) => {
+      const getSelectionMeta = (range: Range): SelectionMeta | undefined => {
+        const startEl =
+          range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+            ? range.commonAncestorContainer.parentElement
+            : (range.commonAncestorContainer as HTMLElement);
+        const messageEl = startEl?.closest("[data-message-id]") as HTMLElement | null;
+        const nodeId = messageEl?.dataset.messageId;
+        return nodeId ? { nodeId } : undefined;
+      };
+
+      const stageContentAnchor = (text: string, meta?: SelectionMeta) => {
+        if (meta?.nodeId) {
+          sessionSetPendingAnchor({ kind: "content", nodeId: meta.nodeId, quote: text });
+        }
+      };
+
+      return (
+        <SelectionToolbar
+          containerRef={ctx.containerRef}
+          getSelectionMeta={getSelectionMeta}
+          onDefine={ctx.onDefine}
+          onAsk={(text, meta) => {
+            stageContentAnchor(text, meta);
+            ctx.onAsk(text);
+          }}
+          onBranch={(text, meta) => {
+            stageContentAnchor(text, meta);
+            ctx.onBranch(text);
+          }}
+          onSave={async (text, context) => {
           if (!userId) return;
           const title = text.slice(0, 60).replace(/\n/g, ' ') + (text.length > 60 ? '…' : '');
           try {
@@ -303,9 +341,10 @@ export function Reader() {
             showMemoToast('Failed to save memo');
           }
         }}
-      />
-    ),
-    [userId, source.id, source.title, session.sessionId, session.breadcrumb, showMemoToast],
+        />
+      );
+    },
+    [userId, source.id, source.title, session.sessionId, session.breadcrumb, sessionSetPendingAnchor, showMemoToast],
   );
 
   // Wrap viewScope for InlineBranches' fetchBranchPreview prop
@@ -314,6 +353,41 @@ export function Reader() {
       viewScope(uid, bid, sid, nodeId),
     [],
   );
+
+  // Tree node click: switch scope AND jump back to the node's anchor
+  // (P5 dual-anchor loop). pdf → dispatch "pi-tree:pdf-jump" for the PDF
+  // panel; content → ask ChatView to scroll + highlight the referenced answer.
+  const handleTreeNavigate = useCallback(
+    (nodeId: string) => {
+      const anchor = sessionTree ? findNode(sessionTree, nodeId)?.anchor : undefined;
+      if (anchor?.kind === "pdf") {
+        window.dispatchEvent(new CustomEvent("pi-tree:pdf-jump", { detail: anchor }));
+      } else if (anchor?.kind === "content") {
+        setContentJump({ nodeId: anchor.nodeId, quote: anchor.quote, nonce: Date.now() });
+      }
+      sessionHandleNavigate(nodeId);
+    },
+    [sessionTree, sessionHandleNavigate],
+  );
+
+  // Portable reading-record export (P5): download the flattened JSON.
+  const handleExportReadingRecord = useCallback(async () => {
+    if (session.sessionId === null) return;
+    try {
+      const record = await fetchReadingRecord(session.sessionId);
+      const blob = new Blob([JSON.stringify(record, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `reading-record-${session.sessionId}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to export reading record:", err);
+    }
+  }, [session.sessionId]);
 
 
 
@@ -413,7 +487,7 @@ export function Reader() {
         tree={session.tree}
         viewNodeId={session.viewNodeId}
         generatingNodeIds={session.generatingNodeIds}
-        onNavigate={session.handleNavigate}
+        onNavigate={handleTreeNavigate}
         onDeleteNode={session.handleDeleteNode}
         onRenameNode={session.handleRenameNode}
         onExportNode={(nodeId) => {
@@ -425,6 +499,7 @@ export function Reader() {
           a.click();
           a.remove();
         }}
+        onExportReadingRecord={handleExportReadingRecord}
         isOpen={panel.sidebarOpen}
         onClose={() => panel.setSidebarOpen(false)}
       />
@@ -508,6 +583,7 @@ export function Reader() {
               onCancelQueued={session.handleCancelQueued}
               slashCommands={slashCommands}
               onSlashCommand={handleSlashCommand}
+              contentJump={contentJump}
             />
           </>
         ) : null}

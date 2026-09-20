@@ -15,9 +15,11 @@ import type {
   TopicMeta,
   SectionStatusMeta,
   SectionLabelMeta,
+  AnchorMeta,
   PiTreeData,
   AnnotatedTreeNode,
   ToolStep,
+  UnifiedAnchor,
 } from "../types/index.js";
 import {
   createAgentSession,
@@ -109,6 +111,8 @@ export class PiSession {
   private topicCache: Map<string, TopicMeta> = new Map();
   private statusOverrides: Map<string, string> = new Map();
   private labelOverrides: Map<string, string> = new Map();
+  /** P5 unified anchors, keyed by the target entry (question node) id. */
+  private anchorCache: Map<string, UnifiedAnchor> = new Map();
   /** Deferred system context — prepended to the first user message */
   private pendingContext: string | null = null;
   /** If agent creation failed, stores the reason for error reporting */
@@ -642,6 +646,7 @@ export class PiSession {
         source: meta.source,
         status: meta.status,
         contentAnchor: meta.contentAnchor,
+        anchor: this.anchorCache.get(entry.id),
         messageCount: this.countMessages(piNode),
         isCurrent: entry.id === leafId || this.isOnCurrentPath(piNode, leafId),
         summary: entry.type === "branch_summary" ? (entry as any).summary : undefined,
@@ -657,6 +662,7 @@ export class PiSession {
         label: this.labelOverrides.get(entry.id) ?? this.inferLabel(entry),
         source: "user" as const,
         status: "active" as const,
+        anchor: this.anchorCache.get(entry.id),
         messageCount: this.countMessages(piNode),
         isCurrent: entry.id === leafId || this.isOnCurrentPath(piNode, leafId),
         children: this.collectMeaningfulChildren(piNode.children),
@@ -680,6 +686,7 @@ export class PiSession {
             label: "✦ …",
             source: "auto" as const,
             status: "completed" as const,
+            anchor: this.anchorCache.get(entry.id),
             messageCount: 0,
             isCurrent: false,
             children,
@@ -705,6 +712,7 @@ export class PiSession {
           label: this.labelOverrides.get(entry.id) ?? ("✦ " + this.inferAssistantLabel(entry)),
           source: "auto" as const,
           status: decision.status ?? "active",
+          anchor: this.anchorCache.get(entry.id),
           messageCount: 0,
           isCurrent: entry.id === leafId,
           children,
@@ -728,6 +736,7 @@ export class PiSession {
           label: this.inferLabel(entry),
           source: "auto" as const,
           status: "active" as const,
+          anchor: this.anchorCache.get(entry.id),
           messageCount: this.countMessages(piNode),
           isCurrent: false,
           children: childNodes,
@@ -1002,10 +1011,65 @@ export class PiSession {
     }
   }
 
+  /**
+   * Attach a P5 unified anchor to an existing entry (the question node).
+   * Append-only custom entry in the session JSONL — survives restarts and
+   * rides along in the JSONL export bundle. The leaf position is restored
+   * so the anchor entry never shows up as a parasitic tree node.
+   */
+  setAnchor(entryId: string, anchor: UnifiedAnchor): void {
+    const savedLeafId = this.sm.getLeafId();
+
+    this.sm.appendCustomEntry(CUSTOM_TYPE, {
+      kind: "anchor",
+      targetEntryId: entryId,
+      anchor,
+    } satisfies AnchorMeta);
+
+    // Restore leaf position so the tree structure is unaffected
+    if (savedLeafId) this.sm.branch(savedLeafId);
+
+    // Keep in-memory state in sync so getAnchor() works immediately
+    this.anchorCache.set(entryId, anchor);
+  }
+
+  /** Read the unified anchor attached to an entry, if any. */
+  getAnchor(entryId: string): UnifiedAnchor | null {
+    return this.anchorCache.get(entryId) ?? null;
+  }
+
+  /** All anchors in this session, keyed by target entry id. */
+  getAllAnchors(): Map<string, UnifiedAnchor> {
+    return new Map(this.anchorCache);
+  }
+
+  /**
+   * Find the most recent user-message entry on the current leaf branch.
+   * After a send completes, this is the question node the new message
+   * created — the natural place to attach a pending anchor.
+   */
+  findLastUserMessageEntry(): string | null {
+    const leafId = this.sm.getLeafId();
+    if (!leafId) return null;
+    const path = this.sm.getBranch(leafId);
+    for (let i = path.length - 1; i >= 0; i--) {
+      const entry = path[i] as SessionEntry;
+      if (
+        entry.type === "message" &&
+        "message" in entry &&
+        (entry as any).message?.role === "user"
+      ) {
+        return entry.id;
+      }
+    }
+    return null;
+  }
+
   private rebuildTopicCache(): void {
     this.topicCache.clear();
     this.statusOverrides.clear();
     this.labelOverrides.clear();
+    this.anchorCache.clear();
 
     for (const entry of this.sm.getEntries()) {
       if (entry.type !== "custom") continue;
@@ -1022,6 +1086,9 @@ export class PiSession {
         this.statusOverrides.set(data.targetEntryId, data.newStatus);
       } else if (data.kind === "section_label") {
         this.labelOverrides.set(data.targetEntryId, data.newLabel);
+      } else if (data.kind === "anchor") {
+        // Latest-wins: a node's anchor is the last anchor entry written for it.
+        this.anchorCache.set(data.targetEntryId, data.anchor);
       }
     }
 
@@ -1081,6 +1148,7 @@ export class PiSession {
       source: meta?.source ?? "auto",
       status: meta?.status ?? "active",
       contentAnchor: meta?.contentAnchor,
+      anchor: this.anchorCache.get(piNode.entry.id),
       messageCount,
       isCurrent: piNode.entry.id === leafId,
       summary:

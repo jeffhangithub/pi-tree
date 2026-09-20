@@ -10,8 +10,10 @@
 
 import { Hono } from "hono";
 import { eq, and, not, desc, like, or, sql } from "drizzle-orm";
+import { existsSync } from "node:fs";
+import { buildReadingRecord, type UnifiedAnchor } from "@pi-tree/core";
 import { getDb, userSessions, users, sources } from "../db/index.js";
-import { closeSession } from "../services/session-store.js";
+import { closeSession, getSession } from "../services/session-store.js";
 import type { SourceSession, SessionContext } from "@pi-tree/shared";
 
 export const sessionCrudRoutes = new Hono();
@@ -123,6 +125,62 @@ sessionCrudRoutes.get("/:userId", async (c) => {
 
   const sessions: SourceSession[] = sliced.map(rowToSourceSession);
   return c.json({ sessions, hasMore });
+});
+
+// ---------------------------------------------------------------------------
+// GET /sessions/:id/reading-record — portable reading record (P5)
+//
+// Flattens the session tree into the Zotero-compatible JSON:
+//   { "source": "…", "nodes": [ { id, parentId, question, answer, anchor } ] }
+// `anchor` is the unified anchor ({kind:"pdf"|"content", …}) or null.
+// ---------------------------------------------------------------------------
+
+sessionCrudRoutes.get("/:id/reading-record", async (c) => {
+  const sessionId = Number(c.req.param("id"));
+  if (!Number.isInteger(sessionId) || sessionId <= 0) {
+    return c.json({ error: "Invalid session id" }, 400);
+  }
+
+  const db = await getDb();
+  const row = await db
+    .select()
+    .from(userSessions)
+    .where(
+      and(
+        eq(userSessions.id, sessionId),
+        eq(userSessions.isActive, 1),
+      ),
+    )
+    .get();
+  if (!row) return c.json({ error: "Session not found" }, 404);
+
+  // Guard before getSession(): a "pending-*" placeholder would silently
+  // create a fresh JSONL instead of loading real content.
+  if (!existsSync(row.sessionFile)) {
+    return c.json({ error: "Session has no conversation content yet" }, 400);
+  }
+
+  try {
+    const manager = await getSession(row.userId, row.sourceId, sessionId);
+    const { tree, contents } = manager.getExportSnapshot();
+    const anchors: Map<string, UnifiedAnchor> = manager.getAnchorMap();
+
+    const sourceRow = await db
+      .select({ title: sources.title })
+      .from(sources)
+      .where(eq(sources.id, row.sourceId))
+      .get();
+
+    const record = buildReadingRecord(
+      tree,
+      contents,
+      anchors,
+      sourceRow?.title || row.sourceId,
+    );
+    return c.json(record);
+  } catch (err) {
+    return c.json({ error: (err as Error).message ?? "Failed to build reading record" }, 500);
+  }
 });
 
 // ---------------------------------------------------------------------------

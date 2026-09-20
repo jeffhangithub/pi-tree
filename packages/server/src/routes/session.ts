@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import { normalizeUnifiedAnchor, type UnifiedAnchor } from "@pi-tree/core";
 import { getSession, closeSession, withSessionLock, getSessionByKey, withSessionLockByKey } from "../services/session-store.js";
 
 export const sessionRoutes = new Hono();
@@ -9,6 +10,12 @@ export const sessionRoutes = new Hono();
  */
 function extractUserId(body: Record<string, unknown>): string {
   return (body.userId as string) ?? "default";
+}
+
+/** Parse a client-supplied anchor (untrusted JSON) into the strict shape. */
+function extractAnchor(body: Record<string, unknown>): UnifiedAnchor | undefined {
+  if (body.anchor === undefined || body.anchor === null) return undefined;
+  return normalizeUnifiedAnchor(body.anchor) ?? undefined;
 }
 
 /**
@@ -92,9 +99,10 @@ sessionRoutes.post("/message", async (c) => {
     sessionId?: number;
     sessionKey?: string;
     forceBranch?: boolean;
+    anchor?: unknown;
   }>();
 
-  const opts = { forceBranch: body.forceBranch };
+  const opts = { forceBranch: body.forceBranch, anchor: extractAnchor(body) };
 
   if (body.sessionKey) {
     const result = await withSessionLockByKey(body.sessionKey, async (manager) => {
@@ -121,6 +129,7 @@ sessionRoutes.post("/message/stream", async (c) => {
     sessionId?: number;
     sessionKey?: string;
     forceBranch?: boolean;
+    anchor?: unknown;
   }>();
 
   /** Persist token usage from an onDone result to the database. */
@@ -198,7 +207,7 @@ sessionRoutes.post("/message/stream", async (c) => {
     stream.onAbort(() => abortController.abort());
 
     try {
-      const opts = { forceBranch: body.forceBranch, signal: abortController.signal };
+      const opts = { forceBranch: body.forceBranch, signal: abortController.signal, anchor: extractAnchor(body) };
       const onQueued = () => {
         stream.writeSSE({ data: JSON.stringify({ type: "queued" }) });
       };

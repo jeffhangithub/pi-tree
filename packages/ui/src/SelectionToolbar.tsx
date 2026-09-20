@@ -10,6 +10,9 @@ export interface SelectionMeta {
   section?: string;
   /** Overrides the default ±100-char context window (custom DOM without p/li) */
   context?: string;
+  /** Message (tree node) id containing the selection — set by chat views so
+   *  the host can build a {kind:"content", nodeId, quote} unified anchor. */
+  nodeId?: string;
 }
 
 export interface SelectionToolbarProps {

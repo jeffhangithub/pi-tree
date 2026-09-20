@@ -7,7 +7,12 @@ import {
   type ReactNode,
 } from "react";
 import { sendMessageStreaming } from "./api";
-import type { TreeNodeView, SessionState, ToolStep } from "@pi-tree/core/types";
+import type {
+  TreeNodeView,
+  SessionState,
+  ToolStep,
+  UnifiedAnchor,
+} from "@pi-tree/core/types";
 
 export interface ActiveStreamState {
   gen: number;
@@ -35,6 +40,8 @@ export interface QueuedSend {
    *  time (which would create a sibling branch). Set for plain follow-ups
    *  typed while watching the active stream. */
   chainToResult?: boolean;
+  /** P5 unified anchor to attach to the question node this send creates. */
+  anchor?: UnifiedAnchor;
 }
 
 interface StreamContextValue {
@@ -46,7 +53,7 @@ interface StreamContextValue {
     message: string,
     viewNodeId: string | null,
     onTreeUpdate: (tree: TreeNodeView) => void,
-    opts?: { forceBranch?: boolean },
+    opts?: { forceBranch?: boolean; anchor?: UnifiedAnchor },
   ) => Promise<void>;
   clearStream: (sourceId: string, sessionId: number) => void;
   stopStream: (sourceId: string, sessionId: number) => void;
@@ -79,7 +86,7 @@ export function StreamProvider({ children }: { children: ReactNode }) {
       message: string,
       viewNodeId: string | null,
       onTreeUpdate: (tree: TreeNodeView) => void,
-      opts?: { forceBranch?: boolean },
+      opts?: { forceBranch?: boolean; anchor?: UnifiedAnchor },
     ) => {
       const key = getStreamKey(sourceId, sessionId);
       const nextGen = (streamGensRef.current[key] ?? 0) + 1;
