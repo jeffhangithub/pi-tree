@@ -246,7 +246,7 @@ export default function PdfViewer({
   // Temporary in-app render diagnostics: reports what this browser actually
   // renders (DPR, canvas ratio, text-layer colour, overlaps, ink alignment).
   const [diag, setDiag] = useState<string | null>(null);
-  const runDiagnostics = useCallback(() => {
+  const runDiagnostics = useCallback(async () => {
     const wrapper = scrollRef.current?.querySelector(".pdf-page") as HTMLElement | null;
     const canvas = wrapper?.querySelector("canvas") as HTMLCanvasElement | null;
     const layer = wrapper?.querySelector(".pdf-page-text-layer") as HTMLElement | null;
@@ -304,8 +304,67 @@ export default function PdfViewer({
     } catch {
       ink = "blocked";
     }
+    // Decisive check: re-render page 1 offscreen with the same parameters and
+    // compare pixels against the on-screen canvas. A doubled/ghosted canvas
+    // shows a large mean difference; a correct one is near zero.
+    let pageDiff = "n/a";
+    try {
+      if (doc) {
+        const page = await doc.getPage(1);
+        const viewport = page.getViewport({ scale });
+        const off = document.createElement("canvas");
+        off.width = canvas.width;
+        off.height = canvas.height;
+        const offScale = canvas.width / Math.max(1, cr.width);
+        await page.render({
+          canvas: off,
+          viewport,
+          ...(offScale !== 1
+            ? { transform: [offScale, 0, 0, offScale, 0, 0] }
+            : {}),
+        }).promise;
+        const a = canvas.getContext("2d")?.getImageData(0, 0, canvas.width, canvas.height).data;
+        const bctx = off.getContext("2d");
+        const b = bctx?.getImageData(0, 0, off.width, off.height).data;
+        if (a && b) {
+          let sum = 0;
+          let cnt = 0;
+          for (let i = 0; i < a.length; i += 68) {
+            sum += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
+            cnt += 3;
+          }
+          pageDiff = (sum / Math.max(1, cnt)).toFixed(1);
+        }
+      }
+    } catch {
+      pageDiff = "err";
+    }
     setDiag(
-      `dpr=${window.devicePixelRatio} canvas=${canvas.width}x${canvas.height} css=${Math.round(cr.width)}x${Math.round(cr.height)} ratio=${ratio} color=${color} fs=${fontSize} spans=${spans.length} overlap=${sig} ink=${ink} zoom=${Math.round(scale * 100)}%`,
+      `dpr=${window.devicePixelRatio} canvas=${canvas.width}x${canvas.height} css=${Math.round(cr.width)}x${Math.round(cr.height)} ratio=${ratio} color=${color} fs=${fontSize} spans=${spans.length} overlap=${sig} ink=${ink} pageDiff=${pageDiff} zoom=${Math.round(scale * 100)}% | pages=${document.querySelectorAll(".pdf-page").length} canvases=${document.querySelectorAll(".pdf-page canvas").length} boxOverlaps=${(() => {        const boxes = Array.from(document.querySelectorAll(".pdf-page")).map((el) => el.getBoundingClientRect());
+        let n = 0;
+        for (let i = 0; i < boxes.length; i++) {
+          for (let j = i + 1; j < boxes.length; j++) {
+            const a = boxes[i];
+            const b = boxes[j];
+            const ix = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+            const iy = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+            if (ix * iy > 0.5 * Math.min(a.width * a.height, b.width * b.height)) n++;
+          }
+        }
+        return n;
+      })()} stack=${(() => {
+        const target = spans[0];
+        if (!target) return "n/a";
+        const r = target.getBoundingClientRect();
+        return document
+          .elementsFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+          .slice(0, 5)
+          .map((el) => {
+            const cls = typeof el.className === "string" ? el.className.split(" ").filter(Boolean).slice(0, 2).join(".") : "";
+            return el.tagName.toLowerCase() + (cls ? `.${cls}` : "");
+          })
+          .join("<");
+      })()}`,
     );
   }, [scale]);
 
