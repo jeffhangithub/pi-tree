@@ -10,5 +10,6 @@
 | [P1-settings-api-key.md](./P1-settings-api-key.md) | P1 实现规格:设置页 API Key(默认 DeepSeek) |
 | [P3-paper-pipeline.md](./P3-paper-pipeline.md) | P3 实现规格:paper 结构化管道(PDF 上传/arXiv 抓取/章节提取/文件服务) |
 | [P4-pdf-viewer.md](./P4-pdf-viewer.md) | P4 实现规格:真 PDF 渲染面板(pdfjs-dist)+ 划词/划章节提问 |
+| [IMPLEMENTATION_STATUS.zh.md](./IMPLEMENTATION_STATUS.zh.md) | 实现状态与交付说明:各阶段 commit、能力一览、验证结果、使用方式 |
 
 > 代码仓库:https://github.com/jeffhangithub/pi-tree (fork 自 https://github.com/shuowu/pi-tree,upstream 定期同步)

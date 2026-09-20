@@ -53,8 +53,8 @@ test.describe("Add Source", () => {
     await expect(page.locator("#add-paper-title")).toBeVisible();
     await expect(page.locator("#add-paper-arxivId")).toBeVisible();
 
-    // Book dropzone should NOT be visible
-    await expect(page.locator(".add-source-dropzone")).not.toBeVisible();
+    // Paper now supports PDF upload — the dropzone is part of the form
+    await expect(page.locator(".add-source-dropzone")).toBeVisible();
   });
 
   // ── Paper creation ──────────────────────────────────────────────────────
@@ -98,7 +98,9 @@ test.describe("Add Source", () => {
     expect(res.status()).toBe(201);
     const body = await res.json();
     expect(body.type).toBe("paper");
-    expect(body.status).toBe("ready");
+    // Paper sources now have a processing pipeline (hasProcessing): creation
+    // enqueues async processing, so the immediate status is "pending".
+    expect(body.status).toBe("pending");
     expect(body.metadata).toEqual({ arxivId: "2301.07041" });
 
     // Verify it shows up in the listing
