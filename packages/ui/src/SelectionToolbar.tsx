@@ -2,17 +2,34 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { BookA, GitBranch, Pin, Quote } from "lucide-react";
 import "./SelectionToolbar.css";
 
-interface SelectionToolbarProps {
+/** Extra metadata about a selection — generic, not PDF-specific. */
+export interface SelectionMeta {
+  /** 1-based page number when the selection lives in a paged document */
+  page?: number;
+  /** Section/chapter title containing the selection */
+  section?: string;
+  /** Overrides the default ±100-char context window (custom DOM without p/li) */
+  context?: string;
+}
+
+export interface SelectionToolbarProps {
   /** Define: sends term + surrounding context to right sidebar dictionary panel */
-  onDefine: (text: string, context?: string) => void;
+  onDefine: (text: string, context?: string, meta?: SelectionMeta) => void;
   /** Ask: prefills chat input */
-  onAsk?: (text: string) => void;
+  onAsk?: (text: string, meta?: SelectionMeta) => void;
   /** Branch: quotes text and starts a new branch */
-  onBranch?: (text: string) => void;
+  onBranch?: (text: string, meta?: SelectionMeta) => void;
   /** Save: saves selected text as a memo */
-  onSave?: (text: string, context?: string) => void;
+  onSave?: (text: string, context?: string, meta?: SelectionMeta) => void;
   /** Container element to listen for selections in */
   containerRef: React.RefObject<HTMLElement | null>;
+  /** Custom DOM (e.g. a PDF text layer): derive page/section/context from
+   *  the Range. Return undefined to fall back to the default context logic. */
+  getSelectionMeta?: (
+    range: Range,
+    text: string,
+    container: HTMLElement,
+  ) => SelectionMeta | undefined;
 }
 
 interface ToolbarPosition {
@@ -26,13 +43,16 @@ export function SelectionToolbar({
   onBranch,
   onSave,
   containerRef,
+  getSelectionMeta,
 }: SelectionToolbarProps) {
   const [selectedText, setSelectedText] = useState<string | null>(null);
+  const [meta, setMeta] = useState<SelectionMeta | undefined>(undefined);
   const [position, setPosition] = useState<ToolbarPosition | null>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
 
   const dismiss = useCallback(() => {
     setSelectedText(null);
+    setMeta(undefined);
     setPosition(null);
   }, []);
 
@@ -53,6 +73,8 @@ export function SelectionToolbar({
       return;
     }
 
+    setMeta(getSelectionMeta?.(range, text, container));
+
     const rect = range.getBoundingClientRect();
     const containerRect = container.getBoundingClientRect();
     const scrollTop = container.scrollTop;
@@ -65,7 +87,7 @@ export function SelectionToolbar({
         containerRect.width - 80,
       ),
     });
-  }, [containerRef]);
+  }, [containerRef, getSelectionMeta]);
 
   // Desktop: mouseup handler
   const handleMouseUp = useCallback(() => {
@@ -147,41 +169,41 @@ export function SelectionToolbar({
 
   if (!selectedText || !position) return null;
 
-  const handleDefine = () => {
-    // Capture surrounding context from the paragraph/message containing the selection
-    const selection = window.getSelection();
-    let context: string | undefined;
-    if (selection && selection.rangeCount > 0) {
-      const range = selection.getRangeAt(0);
-      // Walk up to the nearest block-level container (.pit-chat-content or <p>)
-      const container =
-        range.commonAncestorContainer.nodeType === Node.TEXT_NODE
-          ? range.commonAncestorContainer.parentElement
-          : (range.commonAncestorContainer as HTMLElement);
-      const blockParent = container?.closest(".pit-chat-content, p, blockquote, li");
-      if (blockParent) {
-        const fullText = blockParent.textContent ?? "";
-        // Keep a window of ~200 chars around the selection
-        const selText = selectedText ?? "";
-        const idx = fullText.indexOf(selText);
-        if (idx >= 0) {
-          const start = Math.max(0, idx - 100);
-          const end = Math.min(fullText.length, idx + selText.length + 100);
-          context = fullText.slice(start, end).trim();
-        } else {
-          // Fallback: first 200 chars of the container
-          context = fullText.slice(0, 200).trim();
-        }
-      }
+  /** Default context: ±100 chars around the selection in the nearest
+   *  block-level container (.pit-chat-content / p / blockquote / li). */
+  const extractContext = (range: Range, text: string): string | undefined => {
+    const container =
+      range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+        ? range.commonAncestorContainer.parentElement
+        : (range.commonAncestorContainer as HTMLElement);
+    const blockParent = container?.closest(".pit-chat-content, p, blockquote, li");
+    if (!blockParent) return undefined;
+    const fullText = blockParent.textContent ?? "";
+    const idx = fullText.indexOf(text);
+    if (idx >= 0) {
+      const start = Math.max(0, idx - 100);
+      const end = Math.min(fullText.length, idx + text.length + 100);
+      return fullText.slice(start, end).trim();
     }
-    onDefine(selectedText!, context);
+    // Fallback: first 200 chars of the container
+    return fullText.slice(0, 200).trim();
+  };
+
+  const handleDefine = () => {
+    // Custom context (PDF page window) wins over the default DOM extraction.
+    const selection = window.getSelection();
+    let context = meta?.context;
+    if (!context && selection && selection.rangeCount > 0) {
+      context = extractContext(selection.getRangeAt(0), selectedText ?? "");
+    }
+    onDefine(selectedText!, context, meta);
     window.getSelection()?.removeAllRanges();
     dismiss();
   };
 
   const handleAsk = () => {
     if (onAsk) {
-      onAsk(selectedText!);
+      onAsk(selectedText!, meta);
     }
     window.getSelection()?.removeAllRanges();
     dismiss();
@@ -189,7 +211,7 @@ export function SelectionToolbar({
 
   const handleBranch = () => {
     if (onBranch) {
-      onBranch(selectedText!);
+      onBranch(selectedText!, meta);
     }
     window.getSelection()?.removeAllRanges();
     dismiss();
@@ -197,28 +219,11 @@ export function SelectionToolbar({
 
   const handleSave = () => {
     const selection = window.getSelection();
-    let context: string | undefined;
-    if (selection && selection.rangeCount > 0) {
-      const range = selection.getRangeAt(0);
-      const container =
-        range.commonAncestorContainer.nodeType === Node.TEXT_NODE
-          ? range.commonAncestorContainer.parentElement
-          : (range.commonAncestorContainer as HTMLElement);
-      const blockParent = container?.closest('.pit-chat-content, p, blockquote, li');
-      if (blockParent) {
-        const fullText = blockParent.textContent ?? '';
-        const selText = selectedText ?? '';
-        const idx = fullText.indexOf(selText);
-        if (idx >= 0) {
-          const start = Math.max(0, idx - 100);
-          const end = Math.min(fullText.length, idx + selText.length + 100);
-          context = fullText.slice(start, end).trim();
-        } else {
-          context = fullText.slice(0, 200).trim();
-        }
-      }
+    let context = meta?.context;
+    if (!context && selection && selection.rangeCount > 0) {
+      context = extractContext(selection.getRangeAt(0), selectedText ?? "");
     }
-    onSave!(selectedText!, context);
+    onSave!(selectedText!, context, meta);
     window.getSelection()?.removeAllRanges();
     dismiss();
   };

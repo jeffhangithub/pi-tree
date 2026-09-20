@@ -1,0 +1,432 @@
+/**
+ * PdfViewer — the pdf.js renderer, loaded lazily (React.lazy) so pdfjs-dist
+ * lands in its own chunk instead of the first-screen bundle.
+ *
+ * Rendering model:
+ * - Continuous scroll: one wrapper div per page (sized up front from each
+ *   page's scale-1 viewport, so scroll layout is stable before paint).
+ * - On-demand paint: each page renders its canvas + TextLayer only when it
+ *   approaches the viewport (IntersectionObserver), then stays rendered.
+ * - Zoom: scale = fitWidth * zoom. The page wrapper carries a
+ *   `--scale-factor` CSS variable; the v5 TextLayer sizes its spans from
+ *   `--total-scale-factor` (derived from it), so canvas and text stay
+ *   aligned. Both are torn down and re-rendered on every scale change.
+ * - StrictMode safety: every render lives in an effect whose cleanup cancels
+ *   the RenderTask and the TextLayer and resets the canvas.
+ */
+import {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { SelectionToolbar } from "@pi-tree/ui";
+import type {
+  PDFDocumentProxy,
+  RenderTask,
+  TextLayer as TextLayerType,
+} from "pdfjs-dist";
+import { loadOutline, loadPdf, TextLayer } from "./pdfjs.js";
+import type {
+  PdfOutlineItem,
+  PdfSelectionMeta,
+  PdfViewerHandle,
+} from "./types.js";
+
+interface PageInfo {
+  pageNumber: number;
+  width: number;
+  height: number;
+}
+
+export interface PdfViewerProps {
+  /** Same-origin PDF URL (Range-capable, e.g. /api/paper/sources/:id/file). */
+  url: string;
+  ref?: React.Ref<PdfViewerHandle>;
+  /** Page-resolved outline — drives data-section per page. */
+  outline?: PdfOutlineItem[];
+  /** PDF-specific selection metadata (page/section/context). */
+  getSelectionMeta?: (
+    range: Range,
+    text: string,
+    container: HTMLElement,
+  ) => PdfSelectionMeta | undefined;
+  onDefine?: (text: string, context?: string) => void;
+  onAsk?: (text: string, meta?: PdfSelectionMeta) => void;
+  onBranch?: (text: string, meta?: PdfSelectionMeta) => void;
+  onSave?: (text: string, context?: string) => void;
+  onOutline?: (outline: PdfOutlineItem[]) => void;
+  onError?: (message: string) => void;
+  onPageChange?: (page: number) => void;
+  onPageTextStatus?: (page: number, hasText: boolean) => void;
+}
+
+export default function PdfViewer({
+  url,
+  ref,
+  outline,
+  getSelectionMeta,
+  onDefine,
+  onAsk,
+  onBranch,
+  onSave,
+  onOutline,
+  onError,
+  onPageChange,
+  onPageTextStatus,
+}: PdfViewerProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pageRefs = useRef(new Map<number, HTMLDivElement>());
+  const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
+  const [pages, setPages] = useState<PageInfo[]>([]);
+  const [containerWidth, setContainerWidth] = useState(0);
+  const [zoom, setZoom] = useState(1);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  // ---- Document lifecycle (StrictMode-safe: cancelled flag + cached doc) --
+  useEffect(() => {
+    let cancelled = false;
+    setDoc(null);
+    setPages([]);
+    setLoadError(null);
+    setCurrentPage(1);
+
+    loadPdf(url)
+      .then(async (loaded) => {
+        if (cancelled) return;
+        setDoc(loaded);
+        // Precompute every page's scale-1 size so wrappers get correct
+        // dimensions (stable scroll layout) before anything is painted.
+        const pageProxies = await Promise.all(
+          Array.from({ length: loaded.numPages }, (_, i) => loaded.getPage(i + 1)),
+        );
+        const infos: PageInfo[] = pageProxies.map((page) => {
+          const viewport = page.getViewport({ scale: 1 });
+          return {
+            pageNumber: page.pageNumber,
+            width: viewport.width,
+            height: viewport.height,
+          };
+        });
+        if (cancelled) return;
+        setPages(infos);
+        onOutline?.(await loadOutline(loaded));
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const message =
+          err instanceof Error ? err.message : "Failed to load PDF";
+        setLoadError(message);
+        onError?.(message);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [url, onOutline, onError]);
+
+  // ---- Fit-width scale -----------------------------------------------
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const update = () => setContainerWidth(el.clientWidth);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const fitScale = useMemo(() => {
+    const baseWidth = pages.reduce((max, p) => Math.max(max, p.width), 0);
+    if (!baseWidth || containerWidth <= 0) return 1;
+    const scale = (containerWidth - 32) / baseWidth;
+    return Math.min(Math.max(scale, 0.2), 4);
+  }, [pages, containerWidth]);
+
+  const scale = fitScale * zoom;
+
+  // ---- Section title per page (from outline, for data-section) ---------
+  const sectionForPage = useMemo(() => {
+    const flat = outline
+      ?.flatMap((root) => walk(root))
+      .sort((a, b) => a.page - b.page);
+    return (page: number): string => {
+      let section = "";
+      for (const entry of flat ?? []) {
+        if (entry.page > 0 && entry.page <= page) section = entry.title;
+        else if (entry.page > page) break;
+      }
+      return section;
+    };
+  }, [outline]);
+
+  // ---- Current page tracking (topmost page in the reading band) --------
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller || pages.length === 0) return;
+    const visible = new Map<number, boolean>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const n = Number((entry.target as HTMLElement).dataset.pageNumber);
+          if (Number.isFinite(n)) visible.set(n, entry.isIntersecting);
+        }
+        const topmost = [...visible.entries()]
+          .filter(([, isVisible]) => isVisible)
+          .map(([n]) => n)
+          .sort((a, b) => a - b)[0];
+        if (topmost) setCurrentPage(topmost);
+      },
+      { rootMargin: "-10% 0px -75% 0px", threshold: 0 },
+    );
+    for (const [, el] of pageRefs.current) observer.observe(el);
+    return () => observer.disconnect();
+  }, [pages]);
+
+  useEffect(() => {
+    onPageChange?.(currentPage);
+  }, [currentPage, onPageChange]);
+
+  // ---- Imperative handle (TOC jumps) ----------------------------------
+  useImperativeHandle(
+    ref,
+    () => ({
+      scrollToPage(page: number) {
+        const el = pageRefs.current.get(page);
+        const scroller = scrollRef.current;
+        if (!el || !scroller) return;
+        scroller.scrollTo({ top: el.offsetTop - 8, behavior: "smooth" });
+      },
+      getScale() {
+        return scale;
+      },
+    }),
+    [scale],
+  );
+
+  const registerRef = useCallback((page: number, el: HTMLDivElement | null) => {
+    if (el) pageRefs.current.set(page, el);
+    else pageRefs.current.delete(page);
+  }, []);
+
+  const zoomIn = useCallback(
+    () => setZoom((z) => Math.min(4, +(z * 1.25).toFixed(2))),
+    [],
+  );
+  const zoomOut = useCallback(
+    () => setZoom((z) => Math.max(0.5, +(z / 1.25).toFixed(2))),
+    [],
+  );
+  const fitWidth = useCallback(() => setZoom(1), []);
+
+  const ready = doc !== null && pages.length > 0;
+
+  return (
+    <div className="pdf-viewer">
+      <div className="pdf-viewer-toolbar">
+        <span className="pdf-viewer-page-indicator">
+          {pages.length > 0 ? `${currentPage} / ${pages.length}` : "– / –"}
+        </span>
+        <span className="pdf-viewer-toolbar-actions">
+          <button
+            type="button"
+            className="pdf-viewer-btn"
+            onClick={fitWidth}
+            title="适应宽度"
+          >
+            适配
+          </button>
+          <button
+            type="button"
+            className="pdf-viewer-btn"
+            onClick={zoomOut}
+            title="缩小"
+          >
+            −
+          </button>
+          <span className="pdf-viewer-zoom-label">
+            {Math.round(scale * 100)}%
+          </span>
+          <button
+            type="button"
+            className="pdf-viewer-btn"
+            onClick={zoomIn}
+            title="放大"
+          >
+            +
+          </button>
+        </span>
+      </div>
+      <div className="pdf-viewer-scroll" ref={scrollRef}>
+        {loadError ? (
+          <div className="pdf-viewer-error">加载 PDF 失败：{loadError}</div>
+        ) : !ready ? (
+          <div className="pdf-viewer-loading">正在加载 PDF…</div>
+        ) : (
+          pages.map((info) => (
+            <PdfPage
+              key={info.pageNumber}
+              doc={doc}
+              info={info}
+              scale={scale}
+              section={sectionForPage(info.pageNumber)}
+              registerRef={registerRef}
+              onTextStatus={onPageTextStatus}
+            />
+          ))
+        )}
+        {ready && onDefine && (
+          <SelectionToolbar
+            containerRef={scrollRef}
+            onDefine={onDefine}
+            onAsk={onAsk}
+            onBranch={onBranch}
+            onSave={onSave}
+            getSelectionMeta={getSelectionMeta}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Single page — canvas + TextLayer with strict render-task lifecycle
+// ---------------------------------------------------------------------------
+
+interface PdfPageProps {
+  doc: PDFDocumentProxy;
+  info: PageInfo;
+  scale: number;
+  section: string;
+  registerRef: (page: number, el: HTMLDivElement | null) => void;
+  onTextStatus?: (page: number, hasText: boolean) => void;
+}
+
+function PdfPage({
+  doc,
+  info,
+  scale,
+  section,
+  registerRef,
+  onTextStatus,
+}: PdfPageProps) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const textLayerRef = useRef<HTMLDivElement>(null);
+  const [shouldRender, setShouldRender] = useState(false);
+  const [renderFailed, setRenderFailed] = useState(false);
+
+  const width = Math.max(1, Math.floor(info.width * scale));
+  const height = Math.max(1, Math.floor(info.height * scale));
+
+  // Register for parent TOC scrollToPage.
+  useEffect(() => {
+    registerRef(info.pageNumber, wrapperRef.current);
+    return () => registerRef(info.pageNumber, null);
+  }, [info.pageNumber, registerRef]);
+
+  // On-demand paint: render once the page approaches the viewport.
+  useEffect(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setShouldRender(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setShouldRender(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "400px 0px 400px 0px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // Canvas + text layer. Cleanup cancels both tasks and resets the canvas,
+  // which keeps React 19 StrictMode double-effects and zoom re-renders safe.
+  useEffect(() => {
+    if (!shouldRender) return;
+    let cancelled = false;
+    let renderTask: RenderTask | null = null;
+    let textLayer: TextLayerType | null = null;
+
+    const wrapper = wrapperRef.current;
+    const canvas = canvasRef.current;
+    const textLayerDiv = textLayerRef.current;
+    if (!wrapper || !canvas || !textLayerDiv) return;
+
+    // TextLayer spans are positioned relative to page dims and scaled via
+    // the --total-scale-factor CSS variable — keep it in sync with canvas.
+    wrapper.style.setProperty("--scale-factor", String(scale));
+
+    (async () => {
+      try {
+        const page = await doc.getPage(info.pageNumber);
+        if (cancelled) return;
+        const viewport = page.getViewport({ scale });
+        canvas.width = Math.max(1, Math.floor(viewport.width));
+        canvas.height = Math.max(1, Math.floor(viewport.height));
+        // v5: pass the canvas element (canvasContext is legacy/optional).
+        renderTask = page.render({ canvas, viewport });
+        textLayer = new TextLayer({
+          textContentSource: page.streamTextContent(),
+          container: textLayerDiv,
+          viewport,
+        });
+        await Promise.all([renderTask.promise, textLayer.render()]);
+        if (cancelled) return;
+        setRenderFailed(false);
+        const hasText =
+          textLayer.textContentItemsStr.join("").trim().length > 0;
+        onTextStatus?.(info.pageNumber, hasText);
+      } catch (err) {
+        if (cancelled) return; // RenderingCancelledException on cleanup
+        renderTask?.cancel();
+        textLayer?.cancel();
+        console.error(`Failed to render page ${info.pageNumber}`, err);
+        setRenderFailed(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      renderTask?.cancel();
+      textLayer?.cancel();
+      textLayerDiv.replaceChildren();
+      canvas.width = 0;
+      canvas.height = 0;
+    };
+  }, [doc, info.pageNumber, scale, shouldRender, onTextStatus]);
+
+  return (
+    <div
+      ref={wrapperRef}
+      className="pdf-page"
+      data-page-number={info.pageNumber}
+      data-section={section}
+      style={{ width, height }}
+    >
+      <canvas ref={canvasRef} className="pdf-page-canvas" />
+      <div ref={textLayerRef} className="pdf-page-text-layer textLayer" />
+      {renderFailed && (
+        <div className="pdf-page-render-error">此页渲染失败</div>
+      )}
+    </div>
+  );
+}
+
+/** Depth-first flatten of an outline tree into {title, page} entries. */
+function walk(item: PdfOutlineItem): { title: string; page: number }[] {
+  return [
+    { title: item.title, page: item.page },
+    ...item.children.flatMap((child) => walk(child)),
+  ];
+}

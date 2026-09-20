@@ -95,6 +95,7 @@
     "@pi-tree/plugin-sdk": "*",
     "hono": "^4.7.0",
     "pdf-parse": "^2.4.5",
+    "pdfjs-dist": "~5.7.284",
     "typebox": "^1.2.6"
   }
 }

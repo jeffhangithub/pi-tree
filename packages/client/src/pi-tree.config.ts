@@ -10,11 +10,13 @@ import { defineConfig } from "./config";
 // ---- Plugin imports ----
 import { newsPlugin } from "pi-tree-news/ui/plugin";
 import { bookPlugin } from "pi-tree-book/ui/plugin";
+import { paperPlugin } from "pi-tree-paper/ui/plugin";
 import { youtubePlugin } from "pi-tree-youtube/ui/plugin";
 
 // ---- Resolve config ----
 export default defineConfig([
   bookPlugin(),
   newsPlugin(),
+  paperPlugin(),
   youtubePlugin(),
 ]);
