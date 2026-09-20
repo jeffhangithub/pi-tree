@@ -678,22 +678,13 @@ function PdfPage({
         if (cancelled) return;
 
         // Atomic swap: the scale variables and both layers change together.
-        // The page is displayed as a PNG <img> rather than a live <canvas>:
-        // some macOS/Chrome GPU combinations composite a canvas twice when it
-        // is repainted at fractional scales, which shows as doubled text that
-        // no bitmap-level check can see. Images use the normal image pipeline.
-        const img = document.createElement("img");
-        img.className = "pdf-page-canvas";
-        img.alt = "";
-        img.draggable = false;
-        img.src = nextCanvas.toDataURL("image/png");
-        img.style.width = `${cssWidth}px`;
-        img.style.height = `${cssHeight}px`;
+        // Building both layers offscreen and swapping them in one step keeps a
+        // cancelled render from leaving a stale frame behind.
         lastCanvasRef.current = nextCanvas;
 
         wrapper.style.setProperty("--total-scale-factor", String(scale));
         wrapper.style.setProperty("--scale-factor", String(scale));
-        canvasHost.replaceChildren(img);
+        canvasHost.replaceChildren(nextCanvas);
         textLayerHost.replaceChildren(...Array.from(nextLayer.childNodes));
 
         setRenderFailed(false);

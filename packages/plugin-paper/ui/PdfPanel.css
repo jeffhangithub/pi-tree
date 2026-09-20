@@ -412,3 +412,19 @@
   font-weight: 700;
   letter-spacing: 0.04em;
 }
+
+/* The app-wide `::selection { color: … }` rule would make the PDF text
+   layer's glyphs visible while selected. Those glyphs are laid out with the
+   browser's own fonts, while the page itself is drawn with the PDF's embedded
+   fonts — showing both at once reads as doubled/garbled text. Keep the layer
+   transparent on selection; the page image already shows the text. */
+.pdf-page-text-layer ::selection {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background: var(--selection-bg, rgba(122, 90, 56, 0.25));
+}
+
+.pdf-page-text-layer ::-moz-selection {
+  color: transparent;
+  background: var(--selection-bg, rgba(122, 90, 56, 0.25));
+}
