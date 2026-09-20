@@ -12,4 +12,7 @@
 | [P4-pdf-viewer.md](./P4-pdf-viewer.md) | P4 实现规格:真 PDF 渲染面板(pdfjs-dist)+ 划词/划章节提问 |
 | [IMPLEMENTATION_STATUS.zh.md](./IMPLEMENTATION_STATUS.zh.md) | 实现状态与交付说明:各阶段 commit、能力一览、验证结果、使用方式 |
 
+| [`.agents/skills/paper-pdf-rendering/`](../../.agents/skills/paper-pdf-rendering/SKILL.md) | 项目级 skill:PDF 渲染/划词的技术契约与陷阱(pdf.js v5 TextLayer 变量、`::selection` 覆盖、DPR、原子替换、插件注册、e2e 契约)+ 验证配方 |
+| `~/.dsh/skills/render-artifact-triage/` | 用户级 skill(跨项目):渲染类 bug 的排查方法论(先复刻用户操作、指标先校准、逐层二分、已知良好参照、两次失败即转刻画、核验委派报告) |
+
 > 代码仓库:https://github.com/jeffhangithub/pi-tree (fork 自 https://github.com/shuowu/pi-tree,upstream 定期同步)
