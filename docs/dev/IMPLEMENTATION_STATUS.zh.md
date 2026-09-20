@@ -55,9 +55,18 @@
 | `npx playwright test`(e2e 回归) | ✅ 35/35(含按新契约更新的 add-source 用例) |
 | 实机冒烟(P3 报告) | ✅ 上传 PDF 与 arXiv 双路径 + Range/206 |
 
-## 已知边界与后续
+## Bug 修复轮次
 
-- **e2e 契约更新**:paper 创建后立即为 `pending`(异步处理),e2e 环境无 arXiv 网络故不等待 ready——真实环境用真实模型/网络时处理完成即 ready;
+### 轮次 1(2026-09-20,commit `40532d8`)——用户实机试用反馈
+| 问题 | 根因 | 修复 | 实测 |
+|---|---|---|---|
+| PDF 选词乱码/文字重影 | pdfjs-dist 5.7 的 TextLayer 依赖 `--text-scale-factor`/`--min-font-size` 等 CSS 契约(在 pdf_viewer.css 中),我们的手抄样式漏了这些规则,span 字号回落到继承值 14.4px(应 9.56px) | 在页面 wrapper 直接设 `--total-scale-factor`(=scale),删除依赖 `--user-unit` 的失效 calc 链,补齐 textLayer 变量契约 | 重叠数 365 → **0**;canvas==textLayer==wrapper(367×475);`fontSize==fontHeight*scale` 145/145 正确;拖选文本与预期完全一致 |
+| 面板布局失衡(目录过长、PDF 视口过短、默认 205% 缩放) | 目录区 max-height 失效/占比过大;初始缩放 clamp 0.2–4 且基于宽容器估算 | 目录默认折叠(展开 max-height 30%);PDF 区 `flex:1`;初始缩放改为容器宽度自适应 clamp 0.6–2;右栏默认宽 320→400px | 折叠时 PDF 视口占 91.5%,展开目录 28.5%,缩放 60% 自适应,无横向溢出 |
+| session tree 看不出父子层级 | 渲染逻辑把单子链折叠为同一缩进(`depth` 不递增);会话本身**无真实分支**(JSONL 中 children>1 均为 custom 元数据) | 每层用 `.tree-children` 包裹(18px 缩进 + 导轨 + tick),子节点恒 `depth+1`,加 `data-depth`,分支徽标 `⑂N` 强化 | 用户会话渲染 depth 0–4、left 8/27/46/65/84;mock 环境真造分支后父(⑂2)→ 两同级子 断言通过 |
+
+> ⚠️ 排查中发现的待查问题:某次 `user_sessions.id=2` 的 `is_active` 被置 0(仅 `DELETE /api/sessions/...` 会写该字段),导致侧栏显示 "No session tree yet";已手工恢复。若会话"消失",优先检查该字段——疑为真实代码缺陷,待专项排查。
+
+## 已知边界与后续- **e2e 契约更新**:paper 创建后立即为 `pending`(异步处理),e2e 环境无 arXiv 网络故不等待 ready——真实环境用真实模型/网络时处理完成即 ready;
 - **P4 未做**:构建脚本自动拷贝 pdfjs 资产(现直接入库 `client/public/pdfjs/`)、manualChunks 优化;
 - **P5 未做**:完整 e2e(核心逻辑已单测覆盖);
 - **后续阶段**:第二阶段 Zotero 插件(共享核心层拆出,见 `DEV_PLAN.zh.md` §5)。
