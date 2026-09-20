@@ -191,6 +191,8 @@ describe("GET /api/settings", () => {
     expect(body.lookupModel).toBe("deepseek-v4-flash");
     expect(body.apiKeyMasked).toBe("");
     expect(body.builtInProviders).toContain("deepseek");
+    // Reply language defaults to follow when nothing is configured
+    expect(body.replyLanguage).toBe("follow");
     // Never plaintext
     expect(body).not.toHaveProperty("apiKey");
   });
@@ -322,5 +324,60 @@ describe("PUT /api/settings", () => {
     const firstBody = await first.json();
     expect(firstBody).toHaveProperty("sessionsEvicted");
     expect(firstBody.sessionsEvicted).toBeGreaterThanOrEqual(0);
+  });
+
+  // ── replyLanguage ──
+
+  it("saves replyLanguage as a top-level models.json field, echoed by GET", async () => {
+    const res = await put({
+      provider: "deepseek",
+      readingModel: "deepseek-v4-flash",
+      replyLanguage: "zh",
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    expect(body.settings.replyLanguage).toBe("zh");
+
+    const file = JSON.parse(readFileSync(modelsJsonPath, "utf-8"));
+    expect(file.replyLanguage).toBe("zh");
+    // Provider entry written in the same request is preserved
+    expect(file.providers.deepseek).toBeDefined();
+
+    const getRes = await app.request("/api/settings");
+    expect((await getRes.json()).replyLanguage).toBe("zh");
+  });
+
+  it("persists replyLanguage without touching existing providers", async () => {
+    await put({ provider: "ollama", apiKey: "sk-keep-me", readingModel: "qwen3" });
+    const res = await put({ provider: "ollama", readingModel: "qwen3", replyLanguage: "en" });
+    expect(res.status).toBe(200);
+    const file = JSON.parse(readFileSync(modelsJsonPath, "utf-8"));
+    expect(file.replyLanguage).toBe("en");
+    expect(file.providers.ollama.apiKey).toBe("sk-keep-me");
+  });
+
+  it("rejects invalid replyLanguage values", async () => {
+    const res = await put({
+      provider: "deepseek",
+      readingModel: "deepseek-v4-flash",
+      replyLanguage: "esperanto",
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.success).toBe(false);
+    expect(body.error).toContain("replyLanguage");
+  });
+
+  it("reports sessionsEvicted when replyLanguage changes", async () => {
+    const first = await put({
+      provider: "deepseek",
+      readingModel: "deepseek-v4-flash",
+      replyLanguage: "de",
+    });
+    expect(first.status).toBe(200);
+    const firstBody = await first.json();
+    expect(firstBody.sessionsEvicted).toBeGreaterThanOrEqual(0);
+    expect(firstBody.settings.replyLanguage).toBe("de");
   });
 });

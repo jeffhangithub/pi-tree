@@ -15,7 +15,7 @@ import { DictQuickCardStack } from "./DictionaryPanel";
 import { SessionUsageBadge } from "./SessionUsageBadge";
 import { NavMenu } from "./NavMenu";
 
-import { fetchModels, updateSession, viewScope, createMemo, searchMemos, fetchMemos, enrichMemo, fetchHasAnalysis, summarizeBranch, exportSessionUrl } from "../api";
+import { fetchModels, fetchSettings, updateSession, viewScope, createMemo, searchMemos, fetchMemos, enrichMemo, fetchHasAnalysis, summarizeBranch, exportSessionUrl, REPLY_LANGUAGES, REPLY_LANGUAGE_LABELS, type ReplyLanguage } from "../api";
 import { getBranchesCollapsed, getShowUsage, setShowUsage as saveShowUsage } from "../utils/preferences";
 import { PanelLeft, PanelRight, Layers, Settings, Zap, StickyNote, Search, FileText, Plus } from "lucide-react";
 import { useAddSource } from "../AddSourceContext";
@@ -84,15 +84,24 @@ export function Reader() {
   // Model name and available models for the picker
   const [globalModel, setGlobalModel] = useState<string | null>(null);
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
+  const [globalReplyLanguage, setGlobalReplyLanguage] = useState<ReplyLanguage | null>(null);
   useEffect(() => {
     fetchModels().then(({ models, currentModel }) => {
       setGlobalModel(currentModel);
       setAvailableModels(models);
     });
+    fetchSettings()
+      .then((s) => setGlobalReplyLanguage(s.replyLanguage ?? "follow"))
+      .catch(() => {
+        // Settings may be unavailable — the dropdown falls back to "follow".
+      });
   }, []);
 
   // Effective model: session override wins over global default
   const modelName = session.sessionContext?.model ?? globalModel;
+
+  // Session-scoped reply language ("" = no override → global default applies)
+  const sessionReplyLanguage = session.sessionContext?.replyLanguage ?? "";
 
   const defaultBranchesCollapsed = useMemo(() => getBranchesCollapsed(), []);
 
@@ -327,6 +336,31 @@ export function Reader() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, source.id, session.sessionId, session.sessionContext, session.updateLocalSessionContext]);
 
+  // Session-scoped reply language switch: "" = follow the global default
+  // (field removed from context), otherwise a concrete language override.
+  const handleReplyLanguageChange = useCallback(async (lang: string) => {
+    if (!userId || session.sessionId === null) return;
+    const currentContext = session.sessionContext ?? { mode: 'reading' };
+    const newContext = { ...currentContext };
+    if (lang === "") {
+      delete newContext.replyLanguage;
+    } else {
+      newContext.replyLanguage = lang;
+    }
+    // Optimistic update — show the new language immediately
+    session.updateLocalSessionContext(newContext);
+    try {
+      await updateSession(userId, source.id, session.sessionId, {
+        context: newContext,
+      });
+    } catch (err) {
+      console.error('Failed to switch reply language:', err);
+      // Rollback the optimistic update so UI stays in sync with server
+      session.updateLocalSessionContext(currentContext);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, source.id, session.sessionId, session.sessionContext, session.updateLocalSessionContext]);
+
   const toggleUsage = useCallback(() => {
     setShowUsage(prev => {
       const next = !prev;
@@ -405,7 +439,30 @@ export function Reader() {
           isScoped={session.viewNodeId !== null}
           panelToggles={panelToggles}
           sessionLabel={session.sessionLabel}
-          leftSlot={<NavMenu />}
+          leftSlot={
+            <>
+              <NavMenu />
+              {session.sessionId !== null && (
+                <select
+                  className="reader-language-select"
+                  value={sessionReplyLanguage}
+                  onChange={(e) => handleReplyLanguageChange(e.target.value)}
+                  title="Reply language for this session"
+                  aria-label="Reply language for this session"
+                  data-testid="reply-language-select"
+                >
+                  <option value="">
+                    跟随全局 · {REPLY_LANGUAGE_LABELS[globalReplyLanguage ?? "follow"]}
+                  </option>
+                  {REPLY_LANGUAGES.map((lang) => (
+                    <option key={lang} value={lang}>
+                      {REPLY_LANGUAGE_LABELS[lang]}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </>
+          }
         />
         {showBookSetup ? (
           <SourceSetupState

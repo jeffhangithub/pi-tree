@@ -95,12 +95,28 @@ export async function testModelConnection(model: string): Promise<TestConnection
 // Settings — provider / API key / base URL configuration
 // ---------------------------------------------------------------------------
 
+/** Reply language preference — shared between SettingsModal and Reader. */
+export type ReplyLanguage = "follow" | "zh" | "en" | "ja" | "de" | "fr";
+
+export const REPLY_LANGUAGES: ReplyLanguage[] = ["follow", "zh", "en", "ja", "de", "fr"];
+
+export const REPLY_LANGUAGE_LABELS: Record<ReplyLanguage, string> = {
+  follow: "跟随提问",
+  zh: "中文",
+  en: "English",
+  ja: "日本語",
+  de: "Deutsch",
+  fr: "Français",
+};
+
 export interface SettingsInfo {
   provider: string;
   baseUrl: string;
   api: string;
   readingModel: string;
   lookupModel: string;
+  /** Global reply language preference. */
+  replyLanguage: ReplyLanguage;
   /** Masked API key (e.g. "sk-…abcd"); "" = not configured. Never plaintext. */
   apiKeyMasked: string;
   providers: ProviderInfo[];
@@ -116,6 +132,7 @@ export interface SettingsUpdate {
   api?: string;
   readingModel?: string;
   lookupModel?: string;
+  replyLanguage?: ReplyLanguage;
 }
 
 export async function fetchSettings(): Promise<SettingsInfo> {

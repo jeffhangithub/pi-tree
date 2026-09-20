@@ -51,6 +51,12 @@ export interface ModelsJsonProvider {
 
 export interface ModelsJson {
   providers?: Record<string, ModelsJsonProvider>;
+  /**
+   * Global reply language preference ("follow" | "zh" | "en" | "ja" | "de"
+   * | "fr"). Read by TreeManager when creating reading sessions; the
+   * Settings route persists it. Not part of the providers map.
+   */
+  replyLanguage?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -228,6 +234,39 @@ export function saveModelsJson(patch: SaveModelsJsonPatch): ModelsJson {
 
   writeJsonAtomic(filePath, data);
   console.log(`[models-json] Saved provider "${patch.provider}" to ${filePath}`);
+  resetModelsJsonCache();
+  return data;
+}
+
+/**
+ * Field-level update of top-level (non-provider) preferences in
+ * `$DATA_PATH/models.json` — read-merge-write, so provider entries written
+ * by saveModelsJson (and any user-authored config) are preserved.
+ */
+export function saveModelsJsonPreferences(
+  patch: Partial<Pick<ModelsJson, "replyLanguage">>,
+): ModelsJson {
+  const filePath = getModelsJsonPath();
+
+  // Fresh read, not the cache — we're the writer.
+  let data: ModelsJson = { providers: {} };
+  if (existsSync(filePath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(filePath, "utf-8")) as ModelsJson;
+      if (parsed && typeof parsed === "object") data = parsed;
+    } catch (err) {
+      console.warn(
+        `[models-json] Existing ${filePath} is invalid — starting fresh:`,
+        err,
+      );
+    }
+  }
+  if (!data.providers) data.providers = {};
+
+  Object.assign(data, patch);
+
+  writeJsonAtomic(filePath, data);
+  console.log(`[models-json] Saved preferences to ${filePath}:`, patch);
   resetModelsJsonCache();
   return data;
 }

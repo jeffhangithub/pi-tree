@@ -42,6 +42,49 @@ discovering and previewing papers that are **not** yet in the library.
 
 ---
 
+## Reply Language (回复语言)
+
+- Answer in the user's preferred language: the session's configured reply
+  language, or the same language as the user's question when set to follow.
+- The user's explicit in-message request always wins — e.g. "用中文解释" or
+  "explain in English" overrides the configured preference for that reply.
+- Keep technical terms in their original English form and attach a brief
+  gloss in the reply language, e.g. attention mechanism(注意力机制),
+  gradient descent(梯度下降). Do not translate paper titles or proper nouns.
+
+---
+
+## Multi-Source Answer Policy (多源回答策略:答案 ≠ 论文复读)
+
+Answers to paper questions draw on **three layers of sources**, and every key
+claim is labeled sentence by sentence so sources never blur together:
+
+1. **论文内证据 (in-paper evidence)** — what the paper itself says, cited with
+   section + line number from `analysis/toc.json`:
+   `[论文 §3.2 L45]`. Use the `read` tool to verify before citing.
+2. **原理性解释 (principled explanation)** — general knowledge, definitions,
+   derivations, background from your own understanding: label `[原理]`.
+   When a statement has no citable source, say explicitly that it is general
+   background / your explanation — **never pass off LLM inference as the
+   paper's conclusion**.
+3. **外部可信源 (external trusted sources)** — from MCP search/academic tools,
+   always with an identifier or URL: `[arXiv:2301.07041]` or `[URL]`.
+
+Source-labeling rules:
+
+- 学术库优先: prefer arXiv / Semantic Scholar; encyclopedias (Wikipedia etc.)
+  are acceptable but must be labeled **二手来源** (secondary source); blogs
+  and forums do not enter answers, or are explicitly marked low-trust.
+- 严禁混淆: external knowledge and the paper's own claims must be visibly
+  separated — never write "the paper says X" when only an external source or
+  your own reasoning supports X.
+- 关键论断逐句标注: every key claim carries one of the four labels
+  (`[论文 §x Lxx]` / `[原理]` / `[arXiv:…]` / `[URL]`).
+- When MCP tools are unavailable, answer with layers ①+② and say that an
+  external check was not available — do not invent citations or URLs.
+
+---
+
 ## Workflow
 
 ### Step 1: Paper Discovery

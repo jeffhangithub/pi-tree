@@ -38,6 +38,11 @@ import { getDb, users, userSessions, sources } from "../db/index.js";
 import { LibraryService } from "./library.js";
 import { getAgentRegistry } from "./agent-registry.js";
 import { findProviderForModel, resolveApiKey } from "./models-json.js";
+import {
+  buildReplyLanguageInstruction,
+  getGlobalReplyLanguage,
+  prependReplyLanguageInstruction,
+} from "./reply-language.js";
 import { join } from "node:path";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import os from "node:os";
@@ -45,6 +50,20 @@ import os from "node:os";
 export class TreeManager {
   private config: ReaderConfig;
   private sessionDbId: number = 0;
+  /**
+   * Effective reply-language instruction for this session, resolved at
+   * creation (session-level override → global default).
+   *
+   * - Fresh sessions: baked into the systemContext once (consumed by the
+   *   SDK on the first user turn), no per-turn injection needed.
+   * - Resumed sessions: the SDK does NOT re-inject systemContext on resume,
+   *   so the instruction is prefixed to every user turn as a transient
+   *   `[SYSTEM CONTEXT …]` block — the SDK strips these blocks from the
+   *   chat UI, tree labels, and exports. This is also what makes
+   *   mid-session language switches take effect immediately.
+   */
+  private replyLanguageInstruction: string = "";
+  private injectReplyLanguagePerTurn: boolean = false;
 
   private constructor(
     private piSession: PiSession,
@@ -68,7 +87,14 @@ export class TreeManager {
    */
   static _createForTest(
     piSession: PiSession,
-    opts?: { userId?: string; sourceId?: string; sessionDbId?: number },
+    opts?: {
+      userId?: string;
+      sourceId?: string;
+      sessionDbId?: number;
+      /** Simulate a resumed session — enables per-turn language injection. */
+      replyLanguageInstruction?: string;
+      injectReplyLanguagePerTurn?: boolean;
+    },
   ): TreeManager {
     const tm = new TreeManager(
       piSession,
@@ -77,6 +103,8 @@ export class TreeManager {
       null as unknown as LibraryService,
     );
     tm.sessionDbId = opts?.sessionDbId ?? 1;
+    tm.replyLanguageInstruction = opts?.replyLanguageInstruction ?? "";
+    tm.injectReplyLanguagePerTurn = opts?.injectReplyLanguagePerTurn ?? false;
     return tm;
   }
 
@@ -158,9 +186,18 @@ export class TreeManager {
       };
     }
 
-    const systemContext = TreeManager.resolveSystemContext(
+    const resolvedSystemContext = TreeManager.resolveSystemContext(
       registry, sourceType, sourceId, userId, sourceRow, resolvedLibraryPath,
     );
+
+    // Reply language: session-level override wins over the global default.
+    // Baked into the systemContext (so fresh sessions get it up front) AND
+    // injected per turn (so it keeps applying on resume / after switches).
+    const replyLanguage = sessionContext?.replyLanguage ?? getGlobalReplyLanguage();
+    const replyLanguageInstruction = buildReplyLanguageInstruction(replyLanguage);
+    const systemContext = [resolvedSystemContext, `Reply language policy: ${replyLanguageInstruction}`]
+      .filter((part) => Boolean(part))
+      .join("\n\n");
 
     const piSession = await PiSession.create(
       userId,
@@ -193,6 +230,10 @@ export class TreeManager {
 
     const tm = new TreeManager(piSession, userId, sourceId, library);
     tm.sessionDbId = dbId ?? (await TreeManager.readSessionDbId(userId, sourceId, options?.sessionId)) ?? 0;
+    tm.replyLanguageInstruction = replyLanguageInstruction;
+    // Resumed sessions never re-consume systemContext — re-assert the
+    // language policy per turn. Fresh sessions already have it baked in.
+    tm.injectReplyLanguagePerTurn = Boolean(resumeSession);
     return tm;
   }
 
@@ -219,7 +260,6 @@ export class TreeManager {
     const systemContext = TreeManager.resolveSystemContext(
       registry, sourceType, syntheticSourceId, userId, null, library.getSourcesPath(),
     );
-
     const piSession = await PiSession.create(
       userId,
       syntheticSourceId,
@@ -240,7 +280,9 @@ export class TreeManager {
     );
 
     console.log(`[tree-manager] Ephemeral session created — user: ${userId}, type: ${sourceType}/${mode}`);
-    return new TreeManager(piSession, userId, syntheticSourceId, library);
+    const tm = new TreeManager(piSession, userId, syntheticSourceId, library);
+    tm.replyLanguageInstruction = buildReplyLanguageInstruction(getGlobalReplyLanguage());
+    return tm;
   }
 
   /**
@@ -563,7 +605,9 @@ export class TreeManager {
       }
     }
 
-    const { response, usage } = await this.piSession.sendMessage(message);
+    const { response, usage } = await this.piSession.sendMessage(
+      this.wrapReplyLanguageInstruction(message),
+    );
 
     // After any branching (explicit or auto), redirect scope to the new
     // branch so follow-up messages continue linearly instead of
@@ -632,7 +676,7 @@ export class TreeManager {
     );
 
     const { response, usage } = await this.piSession.sendMessageStreaming(
-      message,
+      this.wrapReplyLanguageInstruction(message),
       wrappedOnToken,
       callbacks.onTurnEnd,
       callbacks.onToolCall,
@@ -933,6 +977,18 @@ export class TreeManager {
   // ---------------------------------------------------------------------------
   // System context template resolution
   // ---------------------------------------------------------------------------
+
+  /**
+   * Wrap a user message with the transient per-turn reply-language block.
+   * Only active for resumed sessions (fresh sessions have the policy baked
+   * into the systemContext that the SDK consumes on the first turn).
+   */
+  private wrapReplyLanguageInstruction(message: string): string {
+    if (!this.injectReplyLanguagePerTurn || !this.replyLanguageInstruction) {
+      return message;
+    }
+    return prependReplyLanguageInstruction(message, this.replyLanguageInstruction);
+  }
 
   private static resolveSystemContext(
     registry: ReturnType<typeof getAgentRegistry>,

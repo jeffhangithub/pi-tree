@@ -2222,4 +2222,61 @@ describe("TreeManager — Phase 3: Navigation", () => {
       expect(result.viewNodeId).toBe("AI_c1");
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Reply language injection (per-turn, resumed sessions only)
+  // ---------------------------------------------------------------------------
+
+  describe("reply language injection", () => {
+    const instruction =
+      "Always answer in Chinese (中文) unless the user explicitly asks otherwise.";
+
+    it("passes the raw message through for fresh sessions (no per-turn injection)", async () => {
+      const tree = [aUserNode("p1", "msg 1", [], { isCurrent: true })];
+      const mock = createMockPiSession({ annotatedTree: tree });
+      // Fresh session: instruction baked into systemContext instead
+      const tm = TreeManager._createForTest(mock as unknown as PiSession, {
+        replyLanguageInstruction: instruction,
+        injectReplyLanguagePerTurn: false,
+      });
+
+      await tm.handleMessage("hello");
+      expect(mock.sendMessage).toHaveBeenCalledWith("hello");
+    });
+
+    it("prepends the [SYSTEM CONTEXT] block for resumed sessions", async () => {
+      const tree = [aUserNode("p1", "msg 1", [], { isCurrent: true })];
+      const mock = createMockPiSession({ annotatedTree: tree });
+      const tm = TreeManager._createForTest(mock as unknown as PiSession, {
+        replyLanguageInstruction: instruction,
+        injectReplyLanguagePerTurn: true,
+      });
+
+      await tm.handleMessage("hello");
+      const sent = mock.sendMessage.mock.calls[0][0] as string;
+      expect(sent).toContain("[SYSTEM CONTEXT — Reply Language]");
+      expect(sent).toContain(instruction);
+      expect(sent).toContain("\n\n---\n\n");
+      // The user's actual message stays intact after the separator
+      expect(sent.slice(sent.indexOf("\n\n---\n\n") + 7)).toBe("hello");
+    });
+
+    it("applies the same injection on the streaming path", async () => {
+      const tree = [aUserNode("p1", "msg 1", [], { isCurrent: true })];
+      const mock = createMockPiSession({ annotatedTree: tree });
+      const tm = TreeManager._createForTest(mock as unknown as PiSession, {
+        replyLanguageInstruction: instruction,
+        injectReplyLanguagePerTurn: true,
+      });
+
+      await tm.handleMessageStreaming("hello", null, {
+        onToken: async () => {},
+        onTreeUpdate: async () => {},
+        onDone: async () => {},
+      });
+      const sent = mock.sendMessageStreaming.mock.calls[0][0] as string;
+      expect(sent).toContain("[SYSTEM CONTEXT — Reply Language]");
+      expect(sent).toContain(instruction);
+    });
+  });
 });

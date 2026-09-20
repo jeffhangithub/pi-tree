@@ -1,8 +1,32 @@
 {
+  "_comment_enable": "Copy this file to your data directory as mcp.json (e.g. ~/.local/share/pi-tree/mcp.json, or mount to /data/mcp.json in Docker), fill in an API key, and set \"disabled\": false for the servers you want. Servers left disabled are skipped silently.",
+  "_comment_trusted_sources": "可信源白名单(多源回答策略):学术库(arXiv / Semantic Scholar)优先;搜索类(Tavily / Brave)用于补充外部可信来源并附带 URL 出处;百科类结果在回答中须标注为二手来源。",
   "mcpServers": {
-    "brave-search": {
+    "tavily-search": {
+      "disabled": true,
       "command": "npx",
-      "args": ["-y", "@brave/brave-search-mcp-server@latest"]
+      "args": ["-y", "tavily-mcp@latest"],
+      "env": {
+        "TAVILY_API_KEY": "your-key-here"
+      }
+    },
+    "brave-search": {
+      "disabled": true,
+      "command": "npx",
+      "args": ["-y", "@brave/brave-search-mcp-server@latest"],
+      "env": {
+        "BRAVE_API_KEY": "your-key-here"
+      }
+    },
+    "arxiv-search": {
+      "disabled": true,
+      "command": "npx",
+      "args": ["-y", "arxiv-mcp-server@latest"]
+    },
+    "semantic-scholar": {
+      "disabled": true,
+      "command": "npx",
+      "args": ["-y", "@yogsoth-ai/semantic-scholar-mcp@latest"]
     }
   }
 }

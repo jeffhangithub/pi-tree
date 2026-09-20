@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { X, Loader2, Save, Check, Info, Server, GitBranch, BookOpen, Zap, AlertCircle, KeyRound } from "lucide-react";
-import { fetchModels, fetchSettings, saveSettings, fetchDictPrompt, saveDictPrompt, testModelConnection } from "../api";
+import { X, Loader2, Save, Check, Info, Server, GitBranch, BookOpen, Zap, AlertCircle, KeyRound, Languages } from "lucide-react";
+import { fetchModels, fetchSettings, saveSettings, fetchDictPrompt, saveDictPrompt, testModelConnection, REPLY_LANGUAGES, REPLY_LANGUAGE_LABELS, type ReplyLanguage } from "../api";
 import type { ModelInfo, ProviderInfo, SettingsInfo } from "../api";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { getBranchesCollapsed, setBranchesCollapsed as saveBranchesCollapsed } from "../utils/preferences";
@@ -33,6 +33,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
   const [apiKey, setApiKey] = useState("");
   const [clearKey, setClearKey] = useState(false);
   const [baseUrl, setBaseUrl] = useState("");
+  const [replyLanguage, setReplyLanguage] = useState<ReplyLanguage>("follow");
 
   // Dictionary prompt state
   const [dictPrompt, setDictPrompt] = useState("");
@@ -57,6 +58,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
         setBaseUrl(settingsData.baseUrl ?? "");
         setReadingModel(settingsData.readingModel || modelsData.currentModel || "");
         setLookupModel(settingsData.lookupModel || "");
+        setReplyLanguage(settingsData.replyLanguage ?? "follow");
         // Load dictionary prompt template
         try {
           const promptData = await fetchDictPrompt();
@@ -109,6 +111,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
         provider: effectiveProvider,
         readingModel,
         lookupModel: lookupModel || readingModel,
+        replyLanguage,
       };
       if (apiKeyToSend !== undefined) update.apiKey = apiKeyToSend;
       if (baseUrl.trim() !== (settings?.baseUrl ?? "")) {
@@ -123,6 +126,7 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
       setClearKey(false);
       setReadingModel(result.settings.readingModel);
       setLookupModel(result.settings.lookupModel);
+      setReplyLanguage(result.settings.replyLanguage ?? "follow");
 
       // Refresh the model list so the new provider's models appear.
       const modelsData = await fetchModels();
@@ -468,6 +472,34 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                 />
                 <p className="form-help">
                   Optional — leave blank to use the provider's built-in default.
+                </p>
+              </div>
+            </div>
+
+            {/* ── Reply language ── */}
+            <div className="settings-subsection">
+              <h4 className="settings-subsection-title">
+                <Languages size={14} />
+                Reply Language
+              </h4>
+
+              <div className="form-group">
+                <label htmlFor="settings-reply-language">Reply language</label>
+                <select
+                  id="settings-reply-language"
+                  value={replyLanguage}
+                  onChange={(e) => setReplyLanguage(e.target.value as ReplyLanguage)}
+                >
+                  {REPLY_LANGUAGES.map((lang) => (
+                    <option key={lang} value={lang}>
+                      {REPLY_LANGUAGE_LABELS[lang]}
+                    </option>
+                  ))}
+                </select>
+                <p className="form-help">
+                  Language for AI replies in reading sessions. You can always
+                  ask for another language explicitly, and individual sessions
+                  can override this from the reading view header.
                 </p>
               </div>
             </div>

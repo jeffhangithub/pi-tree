@@ -62,6 +62,12 @@ export interface SessionContext {
   extensions?: string[];
   /** Optional model override — e.g. use a cheaper model for casual Q&A */
   model?: string;
+  /**
+   * Optional per-session reply language override
+   * ("follow" | "zh" | "en" | "ja" | "de" | "fr"). Wins over the global
+   * default from settings; absent = follow the global default.
+   */
+  replyLanguage?: string;
 }
 
 /**

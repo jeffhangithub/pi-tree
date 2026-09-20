@@ -4,10 +4,12 @@
  * GET /api/settings → effective provider config (API key always masked)
  * PUT /api/settings → field-level update: provider + key + baseUrl + api go
  *                     to $DATA_PATH/models.json; model preferences go to
- *                     global-config.json. Provider is deliberately NOT
- *                     written to global-config.json — if it matched
- *                     cfg.provider, TreeManager would skip the models.json
- *                     override and the key would silently stop applying.
+ *                     global-config.json; replyLanguage goes to models.json
+ *                     (top-level field, next to providers). Provider is
+ *                     deliberately NOT written to global-config.json — if it
+ *                     matched cfg.provider, TreeManager would skip the
+ *                     models.json override and the key would silently stop
+ *                     applying.
  *
  * Mounted at `/api/settings`.
  */
@@ -23,6 +25,12 @@ import {
   saveModelsJson,
   type ModelsJsonProvider,
 } from "../services/models-json.js";
+import {
+  getGlobalReplyLanguage,
+  isReplyLanguage,
+  saveGlobalReplyLanguage,
+  type ReplyLanguage,
+} from "../services/reply-language.js";
 import { closeAllSessions } from "../services/session-store.js";
 
 export const settingsRoutes = new Hono();
@@ -46,6 +54,8 @@ interface SettingsInfo {
   api: string;
   readingModel: string;
   lookupModel: string;
+  /** Global reply language preference ("follow"|"zh"|"en"|"ja"|"de"|"fr"). */
+  replyLanguage: ReplyLanguage;
   /** Masked API key (e.g. "sk-…abcd"); "" = not configured. Never plaintext. */
   apiKeyMasked: string;
   /** Same shape as GET /api/models providers. */
@@ -63,6 +73,8 @@ interface SettingsUpdate {
   api?: string;
   readingModel?: string;
   lookupModel?: string;
+  /** Reply language preference; invalid values are rejected with 400. */
+  replyLanguage?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +159,7 @@ function buildSettingsInfo(): SettingsInfo {
     api,
     readingModel: cfg.readingModel,
     lookupModel: cfg.lookupModel,
+    replyLanguage: getGlobalReplyLanguage(),
     apiKeyMasked: maskApiKey(rawKey),
     providers,
     builtInProviders: builtIn,
@@ -184,6 +197,19 @@ settingsRoutes.put("/", async (c) => {
         { success: false, error: "baseUrl must start with http(s)://" },
         400,
       );
+    }
+    let replyLanguage: ReplyLanguage | undefined;
+    if (body.replyLanguage !== undefined) {
+      if (!isReplyLanguage(body.replyLanguage)) {
+        return c.json(
+          {
+            success: false,
+            error: `Invalid replyLanguage: "${body.replyLanguage}". Expected one of: follow, zh, en, ja, de, fr`,
+          },
+          400,
+        );
+      }
+      replyLanguage = body.replyLanguage;
     }
 
     const before = getServerConfig();
@@ -231,6 +257,14 @@ settingsRoutes.put("/", async (c) => {
       models,
     });
 
+    // Reply language preference — same models.json file, separate top-level
+    // field. Must be written after saveModelsJson so its read-merge-write
+    // sees (and preserves) the provider update from the same request.
+    const beforeReplyLanguage = getGlobalReplyLanguage();
+    if (replyLanguage !== undefined) {
+      saveGlobalReplyLanguage(replyLanguage);
+    }
+
     // Only model preferences go to global-config.json.
     const updated = saveServerConfig({ readingModel, lookupModel });
 
@@ -238,11 +272,13 @@ settingsRoutes.put("/", async (c) => {
     const modelsChanged =
       updated.readingModel !== before.readingModel ||
       updated.lookupModel !== before.lookupModel;
+    const replyLanguageChanged =
+      replyLanguage !== undefined && replyLanguage !== beforeReplyLanguage;
     let sessionsEvicted = 0;
-    if (providerChanged || modelsChanged) {
+    if (providerChanged || modelsChanged || replyLanguageChanged) {
       sessionsEvicted = closeAllSessions();
       console.log(
-        `[settings] Config changed (provider: ${beforeProvider} → ${provider}, model: ${before.readingModel} → ${updated.readingModel}); evicted ${sessionsEvicted} cached session(s)`,
+        `[settings] Config changed (provider: ${beforeProvider} → ${provider}, model: ${before.readingModel} → ${updated.readingModel}, replyLanguage: ${beforeReplyLanguage} → ${replyLanguage ?? beforeReplyLanguage}); evicted ${sessionsEvicted} cached session(s)`,
       );
     }
 
