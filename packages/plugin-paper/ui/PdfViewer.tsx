@@ -243,6 +243,72 @@ export default function PdfViewer({
   );
   const fitWidth = useCallback(() => setZoom(1), []);
 
+  // Temporary in-app render diagnostics: reports what this browser actually
+  // renders (DPR, canvas ratio, text-layer colour, overlaps, ink alignment).
+  const [diag, setDiag] = useState<string | null>(null);
+  const runDiagnostics = useCallback(() => {
+    const wrapper = scrollRef.current?.querySelector(".pdf-page") as HTMLElement | null;
+    const canvas = wrapper?.querySelector("canvas") as HTMLCanvasElement | null;
+    const layer = wrapper?.querySelector(".pdf-page-text-layer") as HTMLElement | null;
+    if (!wrapper || !canvas || !layer) {
+      setDiag("诊断:未找到已渲染页面(请先让 PDF 显示出来)");
+      return;
+    }
+    const cr = canvas.getBoundingClientRect();
+    const ratio = +(canvas.width / Math.max(1, cr.width)).toFixed(3);
+    const spans = Array.from(layer.querySelectorAll("span")).filter(
+      (s) => (s.textContent ?? "").trim().length > 0,
+    ) as HTMLElement[];
+    const first = spans[0];
+    const color = first ? getComputedStyle(first).color : "n/a";
+    const fontSize = first ? getComputedStyle(first).fontSize : "n/a";
+    const rects = spans.map((s) => s.getBoundingClientRect());
+    let sig = 0;
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        const a = rects[i];
+        const b = rects[j];
+        const ix = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+        const iy = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+        if (ix * iy > 0.5 * Math.min(a.width * a.height, b.width * b.height)) sig++;
+      }
+    }
+    let ink = "n/a";
+    try {
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        const dpr = canvas.width / Math.max(1, cr.width);
+        const img = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        const dark = (x: number, y: number) => {
+          const px = Math.round(x * dpr);
+          const py = Math.round(y * dpr);
+          if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) return 0;
+          const i = (py * canvas.width + px) * 4;
+          return img[i] < 160 && img[i + 1] < 160 && img[i + 2] < 160 ? 1 : 0;
+        };
+        let hit = 0;
+        let tot = 0;
+        for (const s of spans.slice(0, 30)) {
+          const r = s.getBoundingClientRect();
+          const x0 = r.left - cr.left;
+          const y0 = r.top - cr.top;
+          for (let y = y0; y < y0 + r.height; y += 1) {
+            for (let x = x0; x < x0 + r.width; x += 2) {
+              tot++;
+              hit += dark(x, y);
+            }
+          }
+        }
+        ink = tot ? (hit / tot).toFixed(3) : "n/a";
+      }
+    } catch {
+      ink = "blocked";
+    }
+    setDiag(
+      `dpr=${window.devicePixelRatio} canvas=${canvas.width}x${canvas.height} css=${Math.round(cr.width)}x${Math.round(cr.height)} ratio=${ratio} color=${color} fs=${fontSize} spans=${spans.length} overlap=${sig} ink=${ink} zoom=${Math.round(scale * 100)}%`,
+    );
+  }, [scale]);
+
   const ready = doc !== null && pages.length > 0;
 
   return (
@@ -279,6 +345,14 @@ export default function PdfViewer({
           >
             +
           </button>
+          <button
+            type="button"
+            className="pdf-viewer-btn"
+            onClick={runDiagnostics}
+            title="渲染诊断(临时)"
+          >
+            诊断
+          </button>
         </span>
       </div>
       <div className="pdf-viewer-scroll" ref={scrollRef}>
@@ -311,6 +385,11 @@ export default function PdfViewer({
           />
         )}
       </div>
+      {diag && (
+        <div className="pdf-viewer-diagnostics" data-testid="pdf-diagnostics">
+          {diag}
+        </div>
+      )}
     </div>
   );
 }
