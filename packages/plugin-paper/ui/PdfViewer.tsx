@@ -243,171 +243,12 @@ export default function PdfViewer({
   );
   const fitWidth = useCallback(() => setZoom(1), []);
 
-  // Temporary in-app render diagnostics: reports what this browser actually
-  // renders (DPR, canvas ratio, text-layer colour, overlaps, ink alignment).
-  const [diag, setDiag] = useState<string | null>(null);
-  // Temporary isolation toggles: hide one layer at a time so the user's eyes
-  // can tell which layer carries a visual artifact.
-  const [hideCanvas, setHideCanvas] = useState(false);
-  const [hideLayer, setHideLayer] = useState(false);
-  const runDiagnostics = useCallback(async () => {
-    const wrapper = scrollRef.current?.querySelector(".pdf-page") as HTMLElement | null;
-    const layer = wrapper?.querySelector(".pdf-page-text-layer") as HTMLElement | null;
-    const displayed = wrapper?.querySelector(
-      "img.pdf-page-canvas, canvas.pdf-page-canvas",
-    ) as HTMLImageElement | HTMLCanvasElement | null;
-    if (!wrapper || !displayed || !layer) {
-      setDiag("诊断:未找到已渲染页面(请先让 PDF 显示出来)");
-      return;
-    }
-    // The page is displayed as a PNG <img>; read its bitmap through a probe
-    // canvas so every measurement stays comparable to a live canvas.
-    const bitmapWidth =
-      displayed instanceof HTMLImageElement ? displayed.naturalWidth : displayed.width;
-    const bitmapHeight =
-      displayed instanceof HTMLImageElement ? displayed.naturalHeight : displayed.height;
-    const probe = document.createElement("canvas");
-    probe.width = Math.max(1, bitmapWidth);
-    probe.height = Math.max(1, bitmapHeight);
-    const probeCtx = probe.getContext("2d");
-    let canvas = probe;
-    if (probeCtx) probeCtx.drawImage(displayed, 0, 0);
-    const cr = displayed.getBoundingClientRect();
-    const ratio = +(bitmapWidth / Math.max(1, cr.width)).toFixed(3);
-    const spans = Array.from(layer.querySelectorAll("span")).filter(
-      (s) => (s.textContent ?? "").trim().length > 0,
-    ) as HTMLElement[];
-    const first = spans[0];
-    const color = first ? getComputedStyle(first).color : "n/a";
-    const fontSize = first ? getComputedStyle(first).fontSize : "n/a";
-    const rects = spans.map((s) => s.getBoundingClientRect());
-    let sig = 0;
-    for (let i = 0; i < rects.length; i++) {
-      for (let j = i + 1; j < rects.length; j++) {
-        const a = rects[i];
-        const b = rects[j];
-        const ix = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
-        const iy = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
-        if (ix * iy > 0.5 * Math.min(a.width * a.height, b.width * b.height)) sig++;
-      }
-    }
-    let ink = "n/a";
-    try {
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        const dpr = canvas.width / Math.max(1, cr.width);
-        const img = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-        const dark = (x: number, y: number) => {
-          const px = Math.round(x * dpr);
-          const py = Math.round(y * dpr);
-          if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) return 0;
-          const i = (py * canvas.width + px) * 4;
-          return img[i] < 160 && img[i + 1] < 160 && img[i + 2] < 160 ? 1 : 0;
-        };
-        let hit = 0;
-        let tot = 0;
-        for (const s of spans.slice(0, 30)) {
-          const r = s.getBoundingClientRect();
-          const x0 = r.left - cr.left;
-          const y0 = r.top - cr.top;
-          for (let y = y0; y < y0 + r.height; y += 1) {
-            for (let x = x0; x < x0 + r.width; x += 2) {
-              tot++;
-              hit += dark(x, y);
-            }
-          }
-        }
-        ink = tot ? (hit / tot).toFixed(3) : "n/a";
-      }
-    } catch {
-      ink = "blocked";
-    }
-    // Decisive check: re-render page 1 offscreen with the same parameters and
-    // compare pixels against the on-screen canvas. A doubled/ghosted canvas
-    // shows a large mean difference; a correct one is near zero.
-    let pageDiff = "n/a";
-    try {
-      if (doc) {
-        const page = await doc.getPage(1);
-        const viewport = page.getViewport({ scale });
-        const dprNow = Math.max(1, window.devicePixelRatio || 1);
-        const off = document.createElement("canvas");
-        // Mirror the viewer's own sizing exactly, otherwise a fractional
-        // difference in the scale factor alone produces full-page AA noise.
-        off.width = Math.max(1, Math.floor(viewport.width * dprNow));
-        off.height = Math.max(1, Math.floor(viewport.height * dprNow));
-        await page.render({
-          canvas: off,
-          viewport,
-          ...(dprNow !== 1
-            ? { transform: [dprNow, 0, 0, dprNow, 0, 0] }
-            : {}),
-        }).promise;
-        const a = canvas.getContext("2d")?.getImageData(0, 0, canvas.width, canvas.height).data;
-        const bctx = off.getContext("2d");
-        const b = bctx?.getImageData(0, 0, off.width, off.height).data;
-        if (a && b) {
-          let sum = 0;
-          let cnt = 0;
-          for (let i = 0; i < a.length; i += 68) {
-            sum += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
-            cnt += 3;
-          }
-          pageDiff = (sum / Math.max(1, cnt)).toFixed(1);
-        }
-      }
-    } catch {
-      pageDiff = "err";
-    }
-    setDiag(
-      `build=R5 dpr=${window.devicePixelRatio} bitmap=${bitmapWidth}x${bitmapHeight} css=${Math.round(cr.width)}x${Math.round(cr.height)} ratio=${ratio} canvasScale=${(() => {
-        const pageWidth = pages[0]?.width;
-        if (!pageWidth) return "n/a";
-        return (bitmapWidth / ((window.devicePixelRatio || 1) * pageWidth)).toFixed(3);
-      })()} stateScale=${scale.toFixed(3)} color=${color} fs=${fontSize} spans=${spans.length} overlap=${sig} ink=${ink} pageDiff=${pageDiff} zoom=${Math.round(scale * 100)}% | pages=${document.querySelectorAll(".pdf-page").length} canvases=${document.querySelectorAll(".pdf-page canvas").length} boxOverlaps=${(() => {        const boxes = Array.from(document.querySelectorAll(".pdf-page")).map((el) => el.getBoundingClientRect());
-        let n = 0;
-        for (let i = 0; i < boxes.length; i++) {
-          for (let j = i + 1; j < boxes.length; j++) {
-            const a = boxes[i];
-            const b = boxes[j];
-            const ix = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
-            const iy = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
-            if (ix * iy > 0.5 * Math.min(a.width * a.height, b.width * b.height)) n++;
-          }
-        }
-        return n;
-      })()} stack=${(() => {
-        const target = spans[0];
-        if (!target) return "n/a";
-        const r = target.getBoundingClientRect();
-        return document
-          .elementsFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-          .slice(0, 5)
-          .map((el) => {
-            const cls = typeof el.className === "string" ? el.className.split(" ").filter(Boolean).slice(0, 2).join(".") : "";
-            return el.tagName.toLowerCase() + (cls ? `.${cls}` : "");
-          })
-          .join("<");
-      })()}`,
-    );
-  }, [scale]);
 
   const ready = doc !== null && pages.length > 0;
 
   return (
-    <div
-      className={[
-        "pdf-viewer",
-        hideCanvas ? "pdf-hide-canvas" : "",
-        hideLayer ? "pdf-hide-layer" : "",
-      ]
-        .filter(Boolean)
-        .join(" ")}
-    >
+    <div className="pdf-viewer">
       <div className="pdf-viewer-toolbar">
-        <span className="pdf-viewer-build-tag" title="渲染修复版本标记">
-          R5
-        </span>
         <span className="pdf-viewer-page-indicator">
           {pages.length > 0 ? `${currentPage} / ${pages.length}` : "– / –"}
         </span>
@@ -438,30 +279,6 @@ export default function PdfViewer({
             title="放大"
           >
             +
-          </button>
-          <button
-            type="button"
-            className="pdf-viewer-btn"
-            onClick={runDiagnostics}
-            title="渲染诊断(临时)"
-          >
-            诊断
-          </button>
-          <button
-            type="button"
-            className="pdf-viewer-btn"
-            onClick={() => setHideCanvas((v) => !v)}
-            title="临时隐藏画布层,用于判断重影来自哪一层"
-          >
-            {hideCanvas ? "显示画布" : "隐藏画布"}
-          </button>
-          <button
-            type="button"
-            className="pdf-viewer-btn"
-            onClick={() => setHideLayer((v) => !v)}
-            title="临时隐藏文字层,用于判断重影来自哪一层"
-          >
-            {hideLayer ? "显示文字层" : "隐藏文字层"}
           </button>
         </span>
       </div>
@@ -495,11 +312,6 @@ export default function PdfViewer({
           />
         )}
       </div>
-      {diag && (
-        <div className="pdf-viewer-diagnostics" data-testid="pdf-diagnostics">
-          {diag}
-        </div>
-      )}
     </div>
   );
 }
@@ -537,8 +349,6 @@ function PdfPage({
   const canvasHostRef = useRef<HTMLDivElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
   const highlightOverlayRef = useRef<HTMLDivElement>(null);
-  /** Offscreen canvas that produced the shown PNG; kept for diagnostics. */
-  const lastCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [shouldRender, setShouldRender] = useState(false);
   const [renderFailed, setRenderFailed] = useState(false);
 
@@ -680,7 +490,6 @@ function PdfPage({
         // Atomic swap: the scale variables and both layers change together.
         // Building both layers offscreen and swapping them in one step keeps a
         // cancelled render from leaving a stale frame behind.
-        lastCanvasRef.current = nextCanvas;
 
         wrapper.style.setProperty("--total-scale-factor", String(scale));
         wrapper.style.setProperty("--scale-factor", String(scale));

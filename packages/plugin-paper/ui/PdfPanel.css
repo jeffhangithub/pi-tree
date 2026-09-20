@@ -378,41 +378,6 @@
   box-shadow: inset 0 -2px 0 rgba(255, 170, 0, 0.55);
 }
 
-/* Temporary render diagnostics readout (see PdfViewer 诊断 button). */
-.pdf-viewer-diagnostics {
-  flex-shrink: 0;
-  padding: 6px 8px;
-  border-top: 1px solid var(--border, #e5e5e5);
-  background: var(--surface-2, #fafafa);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
-  line-height: 1.5;
-  color: var(--text-2, #444);
-  word-break: break-all;
-  user-select: text;
-}
-
-/* Temporary isolation toggles (see PdfViewer 隐藏画布 / 隐藏文字层). */
-.pdf-viewer.pdf-hide-canvas .pdf-page-canvas-host {
-  display: none;
-}
-.pdf-viewer.pdf-hide-layer .pdf-page-text-layer {
-  display: none;
-}
-
-/* Temporary build marker: proves which render build the browser loaded. */
-.pdf-viewer-build-tag {
-  flex-shrink: 0;
-  margin-right: 6px;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: rgba(255, 170, 0, 0.18);
-  color: #b26a00;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
-
 /* The app-wide `::selection { color: … }` rule would make the PDF text
    layer's glyphs visible while selected. Those glyphs are laid out with the
    browser's own fonts, while the page itself is drawn with the PDF's embedded

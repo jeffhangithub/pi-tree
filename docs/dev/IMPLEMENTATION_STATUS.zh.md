@@ -66,7 +66,22 @@
 
 > ⚠️ 排查中发现的待查问题:某次 `user_sessions.id=2` 的 `is_active` 被置 0(仅 `DELETE /api/sessions/...` 会写该字段),导致侧栏显示 "No session tree yet";已手工恢复。若会话"消失",优先检查该字段——疑为真实代码缺陷,待专项排查。
 
-## 已知边界与后续- **e2e 契约更新**:paper 创建后立即为 `pending`(异步处理),e2e 环境无 arXiv 网络故不等待 ready——真实环境用真实模型/网络时处理完成即 ready;
+### 轮次 2(2026-09-20,commit `2b0f…`)——"选中文字时重影"的真正根因
+> 轮次 1 修复了文本层的**静态**对齐/缩放问题后,用户仍反馈"划选文字就出现双份字"。又经过 DPR 高清渲染、离屏原子替换等多轮尝试仍未解决,最终定位到根因:
+
+| 项 | 内容 |
+|---|---|
+| **现象** | 用鼠标划选 PDF 文字时,同一行出现两份字:一份锐利(PDF 内嵌字体),一份字距不同、位置微错(浏览器系统字体);不选中时完全正常 |
+| **根因** | 应用全局样式 `::selection { color: var(--selection-color, #1a1410); }`(见 `packages/client/src/index.css`)会给**被选中文字强制上色**,从而覆盖 PDF 文本层的 `color: transparent`——文本层用**浏览器字体**排版,与页面图上的 **PDF 内嵌字体**字形/字距不同,两者叠加即"重影"。划词提问必然选中文字,故用户感知为"一直存在" |
+| **修复** | `PdfPanel.css` 增加 `.pdf-page-text-layer ::selection { color: transparent; -webkit-text-fill-color: transparent; background: var(--selection-bg,…) }`:选中时文本层保持透明,选区底色保留,页面图文字依旧锐利 |
+| **为何前几轮没找到** | 之前的诊断全部在"未选中"状态下测量(`color=rgba(0,0,0,0)`、`ink≈0.2`、`pageDiff=0.0`、只有一个画布),而重影只在**选中态**出现;Chrome 自带阅读器无此全局样式,故对照正常 |
+| **验证** | 本地以 Playwright 全选文本层:修复前截图明显双份(`sel-active.png`),修复后完全干净(`sel-fixed.png`);修复在 canvas 显示模式下同样成立 |
+| **同时保留的改进** | 离屏渲染 + 原子层替换(避免缩放时残留旧帧)、按 devicePixelRatio 渲染(Retina 清晰)、文本层 scale 变量契约(轮次 1)——均为独立正确的健壮性改进 |
+
+> 排查方法沉淀:当"数据指标全对、用户观感不对"时,应把**用户操作路径**(本例:划选)带进测量条件,并让用户用"逐层隐藏"做肉眼二分,而不是继续在无状态下堆指标。
+
+## 已知边界与后续
+- **e2e 契约更新**:paper 创建后立即为 `pending`(异步处理),e2e 环境无 arXiv 网络故不等待 ready——真实环境用真实模型/网络时处理完成即 ready;
 - **P4 未做**:构建脚本自动拷贝 pdfjs 资产(现直接入库 `client/public/pdfjs/`)、manualChunks 优化;
 - **P5 未做**:完整 e2e(核心逻辑已单测覆盖);
 - **后续阶段**:第二阶段 Zotero 插件(共享核心层拆出,见 `DEV_PLAN.zh.md` §5)。
