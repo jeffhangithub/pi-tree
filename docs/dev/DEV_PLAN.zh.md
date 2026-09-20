@@ -2,6 +2,8 @@
 
 > 分析日期:2026-09-19 · 基线版本:v0.3.3(commit 3cf6ee9)· 仓库:https://github.com/shuowu/pi-tree
 > 目标:基于 pi-tree 继续开发 —— **真 PDF 渲染显示论文原文(嵌入开源方案)、划词/划章节提问、回答中追问、理解后返回上一层、AI 回复默认语言用户可选、设置页配置 API Key(默认 DeepSeek)**。
+> **第一阶段架构要求(2026-09-20 修订)**:每个提问节点保存**原文锚点(页码 + 文本选区 + 章节)**,点击历史节点同时恢复问答上下文并**跳回 PDF 对应位置**;阅读记录从第一天起采用**可导出的可移植格式**,不绑定 pi-tree 数据库。
+> **第二阶段**:把"对话树核心 + 原文锚点"拆成独立共享模块,开发 **Zotero 插件**(pi-tree 作为第一版验证平台,不把 Electron 应用硬塞进 Zotero)。见 §5。
 
 > 需求最终确认(2026-09-19):
 > 1. **真 PDF 渲染必做**——找开源方案嵌入,不是可选;
@@ -147,19 +149,30 @@ packages/
 4. **systemContext + SKILL.md 更新**:注入 toc.json 导航数据,指示 AI 用 `read` 工具按行号引用原文作答。
 - **验收**:上传 arXiv PDF 后,原文件留存可下载;toc.json 章节与行号正确;AI 回答能带行号引用;Range 请求返回 206。
 
-### Phase 4 — 真 PDF 渲染面板(必做,3-4 天)
+### Phase 4 — 真 PDF 渲染面板(必做,3-5 天)
 1. **引入 pdfjs-dist(Apache-2.0)**:client 内 `PdfViewerPanel` 组件(放在 plugin-paper/ui,静态打进 bundle,Vite 动态 import 分包);worker 按 Vite 官方姿势加载。
 2. **渲染**:canvas 逐页渲染 + pdf.js **TextLayer 文本层**(原版排版、可选择复制、支持高亮);虚拟滚动/分页懒渲染(论文 10-40 页规模,先简单分页+按需渲染,再优化);缩放(适配宽度/固定比例)、页码、连续滚动。
 3. **章节导航**:读取 PDF outline(内嵌目录)渲染章节树,点击跳转到对应页;与 Phase 3 的 toc.json 交叉校验。
-4. **选择捕获**:文本层容器 `mouseup` 捕获选区 → 复用 `SelectionToolbar`(Ask/Branch/Define/Save),选区携带 `{page, text, 章节上下文}` 元数据。
+4. **选择捕获 + 锚点采集**:文本层容器 `mouseup` 捕获选区 → 复用 `SelectionToolbar`(Ask/Branch/Define/Save),选区携带 `{page, text, 章节上下文}` 元数据;**开分支时把锚点写入节点**(见 P5 的数据模型)。
 5. **文本层缺失降级**:扫描版 PDF(无文本层)显示提示条("此页无可选择文本"),仍可浏览。
-- **验收**:上传的 PDF 在面板中原版排版显示;页面文字可选择;划词弹出工具栏;章节树点击跳页;放大缩小正常。
+- **验收**:上传的 PDF 在面板中原版排版显示;页面文字可选择;划词弹出工具栏;章节树点击跳页;放大缩小正常;选区锚点(page+quote)采集正确。
 
-### Phase 5 — 划词/划章节提问闭环(1-2 天)
+### Phase 5 — 划词/划章节提问闭环 + 锚点回跳(2-3 天)
 1. PDF 文本层选择 → SelectionToolbar 全功能(Define/Ask/Branch/Save),提问注入引用格式(`> 原文摘录`+ 页码/章节);
 2. **章节级提问**:章节树/章节标题旁"就此节提问"按钮 → 组装带引文(章节标题+页码范围+首句摘录)的提问,预填输入框或直接开分支(`ContentPanelProps.onSendMessage`);
-3. 验证完整闭环:PDF 划词 → 提问 → 回答中追问(InlineBranches)→ 面包屑/树导航返回上层 → 回到 PDF 原文面板继续读。
-- **验收**:e2e 用例(划词提问 + 章节提问 + 追问 + 返回)全绿。
+3. **节点锚点数据模型**(核心扩展,为 Zotero 第二阶段铺路):
+   - 提问节点存储 `anchor: { page, quote, section }`(页码、选中原文、所在章节),与消息并列,不侵入 Pi SDK 树模型;
+   - 树视图与历史节点点击 → **恢复该分支问答上下文 + PDF 面板跳转到 anchor.page 并高亮 quote**;
+4. **可移植阅读记录导出**:新增 `/api/sessions/:id/reading-record`(或客户端导出)产出与 Zotero 兼容的 JSON:
+   ```json
+   { "source": "paper.pdf",
+     "nodes": [ { "id": "n1", "parentId": null,
+                  "question": "…", "answer": "…",
+                  "anchor": { "page": 4, "quote": "…", "section": "3.2" } } ] }
+   ```
+   (Pi SDK 树 ↔ 平铺 nodes 数组双向可映射;Zotero 与 pi-tree 读同一份记录,无需迁移聊天历史);
+5. 验证完整闭环:PDF 划词 → 提问(带锚点)→ 回答中追问(InlineBranches)→ 面包屑/树导航返回上层 → 点击历史节点 → **PDF 跳回锚点页并高亮**。
+- **验收**:e2e 用例(划词提问 + 章节提问 + 追问 + 返回 + 锚点回跳 + 导出记录)全绿。
 
 ### Phase 6 — 收尾与发布(1 天)
 1. 全量 typecheck / test / e2e;核心流程走查;
@@ -175,14 +188,75 @@ packages/
 | P1 | 设置页 API Key(默认 DeepSeek) | 1.5-2 天 | P0 |
 | P2 | AI 回复默认语言可选 | 1 天 | P0 |
 | P3 | paper 管道 + 原 PDF 留存 + 文件服务 | 3-4 天 | P0 |
-| P4 | 真 PDF 渲染面板(pdfjs-dist) | 3-4 天 | P3 |
-| P5 | 划词/划章节提问闭环 | 1-2 天 | P2+P4 |
+| P4 | 真 PDF 渲染面板 + 锚点采集 | 3-5 天 | P3 |
+| P5 | 划词/划章节提问 + 锚点回跳 + 阅读记录导出 | 2-3 天 | P2+P4 |
 | P6 | 收尾发布 | 1 天 | 全部 |
 
-**总计:主线约 10-13.5 人天,全部必做(无可选阶段)。** P1 / P2 / P3 可并行推进;P4 依赖 P3;P5 依赖 P4。
+**总计:主线约 11-15.5 人天,全部必做(无可选阶段)。** P1 / P2 / P3 可并行推进;P4 依赖 P3;P5 依赖 P4。
 
 ### 待决策点
 1. **PDF 渲染方案**:方案 A(pdfjs-dist 自研薄封装,推荐)vs 方案 B(react-pdf)。已倾向 A,开工前最终拍板。
 2. **回复语言偏好粒度**:仅全局设置 vs 全局+会话内切换(建议后者,成本 +0.5 天)。
-3. **上游策略**:纯 fork 独立演进 vs fork+定期同步。建议后者。
-4. **部署形态**:Docker / 源码 / Electron 桌面?影响 P6 验证面,不影响主体开发。
+3. **锚点存储位置**:节点 metadata(不侵入 Pi SDK)vs 旁路表(锚点与树分离,导出更易)。建议先 metadata,导出层统一映射。
+4. **上游策略**:纯 fork 独立演进 vs fork+定期同步。建议后者。
+5. **部署形态**:Docker / 源码 / Electron 桌面?影响 P6 验证面,不影响主体开发。
+
+---
+
+## 5. 第二阶段:Zotero 插件设计计划(路线图,不在本期开发)
+
+> 定位:**pi-tree 是第一版验证平台**(验证"对话树 + PDF 原文锚点"的产品逻辑);验证成立后,把**核心能力拆成独立共享模块**,为 Zotero 做一个原生插件。**不是**把 pi-tree 的 Electron 应用转换/塞进 Zotero——两者运行环境不同(Zotero 插件运行在 Zotero 内部,调用其 PDF Reader API 与 JavaScript API)。
+
+### 5.1 分层架构
+
+```text
+共享核心层(@paper-chat/core,独立包)
+├── 对话树数据模型(节点/父子关系/分支创建/历史与快照)
+├── 原文锚点:PDF、页码、文本范围(page + quote + section)
+├── LLM 请求与上下文组装(分支路径 = 上下文)
+└── 学习记录读写(可移植 JSON 格式,见下)
+
+Pi-tree 适配层(第一阶段)          Zotero 适配层(第二阶段)
+├── pi-tree PDF 阅读界面           ├── Zotero PDF Reader(内置阅读器)
+├── 左侧 Session Tree              ├── 选中文本与当前页
+├── 本地数据库(pi-tree 自有)       ├── 跳转到 PDF 页码/高亮选区
+└── Electron UI                    └── Zotero notes / annotations / 插件 SQLite
+```
+
+### 5.2 第一阶段如何为第二阶段铺路(已并入 P4/P5)
+
+1. **锚点是第一公民**:每个提问节点存 `anchor: { page, quote, section }`,点击历史节点 → 恢复问答上下文 + 跳回原文位置;
+2. **可移植阅读记录格式**(与 Zotero 共享,无需迁移聊天历史):
+```json
+{
+  "source": "paper.pdf",
+  "nodes": [
+    { "id": "n1", "parentId": null,
+      "question": "作者为什么使用这个损失函数?",
+      "answer": "…",
+      "anchor": { "page": 4, "quote": "…", "section": "3.2" } },
+    { "id": "n2", "parentId": "n1",
+      "question": "这里的 KL divergence 是什么?",
+      "answer": "…",
+      "anchor": { "page": 4, "quote": "…", "section": "3.2" } }
+  ]
+}
+```
+3. **不把核心数据绑死在 pi-tree 数据库**:Pi SDK 树 ↔ 平铺 nodes 数组双向可映射,导出/导入接口在第一阶段就提供。
+
+### 5.3 Zotero 插件的职责边界(第二阶段开工时细化)
+
+- 从 Zotero 读取当前 PDF、页码与选中文本(Zotero PDF Reader API);
+- 展示对话树(渲染核心层的树模型);
+- 节点保存到 Zotero note 或插件自有 SQLite;
+- 点击节点 → 调用 Zotero Reader API 跳回原文页并高亮;
+- 学习总结写回 Zotero 笔记;
+- 打包:Zotero 7/8 bootstrapped plugin 结构,`.xpi` 发布,可用社区 TypeScript scaffold(zotero-plugin-scaffold)。
+
+### 5.4 许可边界
+
+- pi-tree 为 **AGPL-3.0**:基于它修改并发布网络服务或衍生版本,须遵守 AGPL 的源码提供义务;
+- 共享核心层若**直接复用 pi-tree 代码**,需继续保持 AGPL 并开源;
+- 若第二阶段**独立重写**核心模块、只复用接口设计与思路(树模型、锚点格式、交互),许可边界更清晰;
+- 建议:第一阶段把核心逻辑尽量收敛成接口清晰的小模块(便于第二阶段"重写 vs 复用"时做选择)。
+
