@@ -4,6 +4,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  flex: 1 1 auto;
   min-height: 0;
 }
 
@@ -36,6 +37,14 @@
   background: var(--pit-bg-hover, var(--bg-hover));
 }
 
+.pdf-panel-toc-chevron {
+  transition: transform var(--pit-transition-fast, var(--transition-fast, 0.15s));
+}
+
+.pdf-panel-toc-toggle.is-open .pdf-panel-toc-chevron {
+  transform: rotate(90deg);
+}
+
 .pdf-panel-header-info {
   flex: 1;
   min-width: 0;
@@ -66,10 +75,12 @@
 }
 
 /* ── TOC ── */
+/* Collapsible (default collapsed in PdfPanel.tsx) — when open it may never
+   eat more than ~30% of the panel so the PDF viewport keeps the rest. */
 
 .pdf-panel-toc {
   border-bottom: 1px solid var(--pit-border, var(--border));
-  max-height: 40%;
+  max-height: 30%;
   overflow-y: auto;
   flex-shrink: 0;
 }
@@ -255,10 +266,13 @@
   margin: 0 auto 16px;
   background: #ffffff;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
-  /* v5 TextLayer sizes itself from these variables (see pdf_viewer.css
-     .pdfViewer .page rule). --scale-factor is set inline per render. */
-  --user-unit: 1;
-  --total-scale-factor: calc(var(--scale-factor, 1) * var(--user-unit));
+  /* pdf.js v5 TextLayer derives EVERYTHING from --total-scale-factor:
+     the text-layer box size (setLayerDimensions → round(down, var(...) * Npx))
+     and the glyph size (--text-scale-factor below). PdfViewer sets it inline
+     to the live scale; we do NOT rely on pdf.js' own `.pdfViewer .page`
+     wrapper (which we don't use) or its --user-unit indirection, because an
+     undefined/unresolved variable there silently leaves spans at the app's
+     inherited font-size and the text layer drifts from the canvas. */
   --scale-round-x: 1px;
   --scale-round-y: 1px;
 }
@@ -273,7 +287,14 @@
 
 /* Text layer overlay — rules mirror pdfjs-dist/web/pdf_viewer.css .textLayer.
    Spans are absolutely positioned with transparent text (selection still
-   shows the native highlight); the canvas sits underneath. */
+   shows the native highlight); the canvas sits underneath.
+   IMPORTANT: we do not load pdf_viewer.css, so every rule the v5 TextLayer
+   depends on must be re-declared here. In particular the span font-size is
+   `calc(var(--text-scale-factor) * var(--font-height))` — pdf.js only sets
+   `--font-height` (inline, per span) and `--min-font-size` (on the layer);
+   --total-scale-factor + the transform come from this stylesheet. Omitting
+   them makes spans render at the app's inherited font-size, which is what
+   produced the overlapping/garbled text selection. */
 .pdf-page-text-layer {
   position: absolute;
   text-align: initial;
@@ -289,6 +310,10 @@
   z-index: 1;
   user-select: text;
   -webkit-user-select: text;
+  /* --- pdf.js v5 textLayer variable contract (pdf_viewer.css .textLayer) --- */
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
 }
 
 .pdf-page-text-layer :is(span, br) {
@@ -302,6 +327,18 @@
 .pdf-page-text-layer > :not(.markedContent),
 .pdf-page-text-layer .markedContent span:not(.markedContent) {
   z-index: 1;
+
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x))
+    scale(var(--min-font-size-inv));
+}
+
+.pdf-page-text-layer .markedContent {
+  display: contents;
 }
 
 .pdf-page-text-layer span.markedContent {

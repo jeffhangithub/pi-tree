@@ -22,7 +22,7 @@ import {
   useState,
 } from "react";
 import type { ContentPanelProps } from "@pi-tree/ui";
-import { FileText, HelpCircle, ListTree, Loader2, RotateCcw } from "lucide-react";
+import { ChevronRight, FileText, HelpCircle, ListTree, Loader2, RotateCcw } from "lucide-react";
 import "./PdfPanel.css";
 import {
   flattenOutline,
@@ -99,7 +99,9 @@ export function PdfPanel({
   const [outline, setOutline] = useState<PdfOutlineItem[]>([]);
   const [outlineLoaded, setOutlineLoaded] = useState(false);
   const [serverSections, setServerSections] = useState<ServerSection[]>([]);
-  const [tocOpen, setTocOpen] = useState(true);
+  // TOC starts collapsed: an expanded outline used to eat most of the narrow
+  // right panel and squeeze the PDF viewport down to a sliver.
+  const [tocOpen, setTocOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageText, setPageText] = useState<Map<number, boolean>>(new Map());
   const [viewerError, setViewerError] = useState<string | null>(null);
@@ -333,8 +335,10 @@ export function PdfPanel({
             type="button"
             className={`pdf-panel-toc-toggle${tocOpen ? " is-open" : ""}`}
             onClick={() => setTocOpen((open) => !open)}
-            title="显示/隐藏目录"
+            title={tocOpen ? "折叠目录" : "展开目录"}
+            aria-expanded={tocOpen}
           >
+            <ChevronRight size={13} className="pdf-panel-toc-chevron" />
             <ListTree size={14} />
             目录
           </button>

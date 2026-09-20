@@ -6,7 +6,9 @@ export function usePanelLayout() {
   const [sidebarWidth, setSidebarWidth] = useState(300);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [rightTab, setRightTab] = useState<"dict" | "content" | "analysis" | "memos">("content");
-  const [rightSidebarWidth, setRightSidebarWidth] = useState(320);
+  // 400px keeps a fit-width PDF page (>=60% of a 612pt page) fully visible in
+  // the content panel instead of cropping it horizontally.
+  const [rightSidebarWidth, setRightSidebarWidth] = useState(400);
 
   const [scrollDirection, setScrollDirection] = useState<ScrollDirection>(null);
 
@@ -91,7 +93,7 @@ export function usePanelLayout() {
         const finalWidth = startWidth - (ev.clientX - startX);
         if (finalWidth < 140) {
           setRightPanelOpen(false);
-          setRightSidebarWidth(320); // Reset for next open
+          setRightSidebarWidth(400); // Reset for next open
         }
       };
 

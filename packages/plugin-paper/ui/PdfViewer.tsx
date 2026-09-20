@@ -42,6 +42,11 @@ interface PageInfo {
   height: number;
 }
 
+/** Adaptive initial zoom bounds: never below 60% (unreadable) and never above
+ *  200% (a single page swallowing the whole panel — the old default was 205%). */
+const FIT_SCALE_MIN = 0.6;
+const FIT_SCALE_MAX = 2;
+
 export interface PdfViewerProps {
   /** Same-origin PDF URL (Range-capable, e.g. /api/paper/sources/:id/file). */
   url: string;
@@ -133,6 +138,10 @@ export default function PdfViewer({
   }, [url, onOutline, onError]);
 
   // ---- Fit-width scale -----------------------------------------------
+  // The content panel is narrow (400 px by default), so the *initial* zoom
+  // must come from the real container width instead of a hard-coded 100%/205%
+  // default. It follows the container on every resize (ResizeObserver), so
+  // widening/narrowing the panel re-fits instead of jumping to 205%.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -146,8 +155,9 @@ export default function PdfViewer({
   const fitScale = useMemo(() => {
     const baseWidth = pages.reduce((max, p) => Math.max(max, p.width), 0);
     if (!baseWidth || containerWidth <= 0) return 1;
+    // containerWidth includes the scroll container's 12px horizontal padding.
     const scale = (containerWidth - 32) / baseWidth;
-    return Math.min(Math.max(scale, 0.2), 4);
+    return Math.min(Math.max(scale, FIT_SCALE_MIN), FIT_SCALE_MAX);
   }, [pages, containerWidth]);
 
   const scale = fitScale * zoom;
@@ -423,8 +433,14 @@ function PdfPage({
     const textLayerDiv = textLayerRef.current;
     if (!wrapper || !canvas || !textLayerDiv) return;
 
-    // TextLayer spans are positioned relative to page dims and scaled via
-    // the --total-scale-factor CSS variable — keep it in sync with canvas.
+    // pdf.js v5 positions text-layer spans as a % of the layer and sizes the
+    // glyphs with `calc(var(--text-scale-factor) * var(--font-height))`, where
+    // --text-scale-factor = --total-scale-factor * --min-font-size (see
+    // PdfPanel.css). Set it DIRECTLY to the active scale on the page wrapper:
+    // the pdf.js `.pdfViewer .page` rule that computes it from --user-unit
+    // never applies to our markup, and an unresolved value leaves the spans at
+    // the app's inherited font-size (overlapping text, garbled selection).
+    wrapper.style.setProperty("--total-scale-factor", String(scale));
     wrapper.style.setProperty("--scale-factor", String(scale));
 
     (async () => {

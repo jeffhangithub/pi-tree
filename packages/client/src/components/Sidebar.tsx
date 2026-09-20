@@ -242,8 +242,12 @@ export function TreeView({
 
 /**
  * Recursive tree node renderer.
- * - Single child → render inline (no indent increase)
- * - Multiple children → indent and show branch indicators
+ * - Children are rendered inside a `.tree-children` wrapper that carries a
+ *   left guide rail + indentation, so every parent→child level is visible
+ *   even when a parent has a single child (a purely linear session used to
+ *   render as one flat column with no hierarchy at all).
+ * - Multiple children → the parent shows a branch badge and its children are
+ *   flagged as branch entries (GitBranch icon).
  * - Collapsible branches
  * - Inline editing support for rename
  */
@@ -309,11 +313,12 @@ function TreeNode({
         ]
           .filter(Boolean)
           .join(" ")}
-        style={{ paddingLeft: depth * 16 + 12 }}
+        data-depth={depth}
         onClick={() => !isEditing && onNavigate(node.id)}
         onContextMenu={(e) => onContextMenu(e, node.id, node.label)}
         role="button"
         tabIndex={0}
+        aria-level={depth + 1}
       >
         {hasBranches && (
           <button
@@ -359,26 +364,31 @@ function TreeNode({
             // Hide unused placeholder nodes (pending ⑂ forks with no content yet)
             !(child.status === "placeholder" && (child.messageCount ?? 0) === 0),
           );
+          if (visibleChildren.length === 0) return null;
           const parentHasMultipleChildren = visibleChildren.length > 1;
-          return visibleChildren.map((child) => (
-            <TreeNode
-              key={child.id}
-              node={child}
-              depth={allChildren.length > 1 ? depth + 1 : depth}
-              viewNodeId={viewNodeId}
-              generatingNodeIds={generatingNodeIds}
-              collapsed={collapsed}
-              onToggleCollapse={onToggleCollapse}
-              onNavigate={onNavigate}
-              onContextMenu={onContextMenu}
-              editingNodeId={editingNodeId}
-              editValue={editValue}
-              onEditChange={onEditChange}
-              onEditFinish={onEditFinish}
-              onEditCancel={onEditCancel}
-              isBranchEntry={parentHasMultipleChildren}
-            />
-          ));
+          return (
+            <div className="tree-children">
+              {visibleChildren.map((child) => (
+                <TreeNode
+                  key={child.id}
+                  node={child}
+                  depth={depth + 1}
+                  viewNodeId={viewNodeId}
+                  generatingNodeIds={generatingNodeIds}
+                  collapsed={collapsed}
+                  onToggleCollapse={onToggleCollapse}
+                  onNavigate={onNavigate}
+                  onContextMenu={onContextMenu}
+                  editingNodeId={editingNodeId}
+                  editValue={editValue}
+                  onEditChange={onEditChange}
+                  onEditFinish={onEditFinish}
+                  onEditCancel={onEditCancel}
+                  isBranchEntry={parentHasMultipleChildren}
+                />
+              ))}
+            </div>
+          );
         })()}
     </>
   );
