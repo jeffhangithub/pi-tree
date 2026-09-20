@@ -246,6 +246,10 @@ export default function PdfViewer({
   // Temporary in-app render diagnostics: reports what this browser actually
   // renders (DPR, canvas ratio, text-layer colour, overlaps, ink alignment).
   const [diag, setDiag] = useState<string | null>(null);
+  // Temporary isolation toggles: hide one layer at a time so the user's eyes
+  // can tell which layer carries a visual artifact.
+  const [hideCanvas, setHideCanvas] = useState(false);
+  const [hideLayer, setHideLayer] = useState(false);
   const runDiagnostics = useCallback(async () => {
     const wrapper = scrollRef.current?.querySelector(".pdf-page") as HTMLElement | null;
     const canvas = wrapper?.querySelector("canvas") as HTMLCanvasElement | null;
@@ -377,7 +381,15 @@ export default function PdfViewer({
   const ready = doc !== null && pages.length > 0;
 
   return (
-    <div className="pdf-viewer">
+    <div
+      className={[
+        "pdf-viewer",
+        hideCanvas ? "pdf-hide-canvas" : "",
+        hideLayer ? "pdf-hide-layer" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
       <div className="pdf-viewer-toolbar">
         <span className="pdf-viewer-page-indicator">
           {pages.length > 0 ? `${currentPage} / ${pages.length}` : "– / –"}
@@ -417,6 +429,22 @@ export default function PdfViewer({
             title="渲染诊断(临时)"
           >
             诊断
+          </button>
+          <button
+            type="button"
+            className="pdf-viewer-btn"
+            onClick={() => setHideCanvas((v) => !v)}
+            title="临时隐藏画布层,用于判断重影来自哪一层"
+          >
+            {hideCanvas ? "显示画布" : "隐藏画布"}
+          </button>
+          <button
+            type="button"
+            className="pdf-viewer-btn"
+            onClick={() => setHideLayer((v) => !v)}
+            title="临时隐藏文字层,用于判断重影来自哪一层"
+          >
+            {hideLayer ? "显示文字层" : "隐藏文字层"}
           </button>
         </span>
       </div>

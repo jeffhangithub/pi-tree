@@ -391,3 +391,11 @@
   word-break: break-all;
   user-select: text;
 }
+
+/* Temporary isolation toggles (see PdfViewer 隐藏画布 / 隐藏文字层). */
+.pdf-viewer.pdf-hide-canvas .pdf-page-canvas-host {
+  display: none;
+}
+.pdf-viewer.pdf-hide-layer .pdf-page-text-layer {
+  display: none;
+}
