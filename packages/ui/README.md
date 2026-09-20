@@ -51,7 +51,7 @@ Components take callbacks and render props for app-specific behavior:
 <ChatView
   renderSelectionToolbar={...}  // render prop
   fetchBranchPreview={...}      // callback
-  modelName="glm-5-turbo"       // data
+  modelName="deepseek-v4-flash"   // data
   userId="shuo"                 // identity
 />
 ```

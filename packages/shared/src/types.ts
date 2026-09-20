@@ -370,7 +370,7 @@ export const DEFAULT_CONFIG: ReaderConfig = {
  * NOT per-user — these are infrastructure/deployment settings.
  *
  * Env vars:
- *   PI_MODEL        → readingModel  (default: "glm-5-turbo")
+ *   PI_MODEL        → readingModel  (default: "deepseek-v4-flash")
  *   PI_LOOKUP_MODEL → lookupModel   (default: same as readingModel)
  *   DATA_PATH       → dataPath      (default: ~/.local/share/pi-tree)
  */
@@ -384,8 +384,8 @@ export interface ServerConfig {
 }
 
 export const DEFAULT_SERVER_CONFIG: ServerConfig = {
-  readingModel: "glm-5-turbo",
-  lookupModel: "glm-5-turbo",
+  readingModel: "deepseek-v4-flash",
+  lookupModel: "deepseek-v4-flash",
 };
 
 // ---------------------------------------------------------------------------

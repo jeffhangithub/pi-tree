@@ -542,3 +542,37 @@
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+/* ── Provider & API Key section ─────────────────────────────────────── */
+
+.settings-subsection {
+  margin-bottom: var(--space-3, 12px);
+}
+
+.settings-subsection-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+  margin: 0 0 var(--space-2, 8px);
+  font-size: var(--text-sm, 13px);
+  font-weight: 600;
+  color: var(--text-muted, #6b7280);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.api-key-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+}
+
+.api-key-row input {
+  flex: 1;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.api-key-row .btn-secondary {
+  flex-shrink: 0;
+  white-space: nowrap;
+}

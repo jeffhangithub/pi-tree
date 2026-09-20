@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { X, Loader2, Save, Check, Info, Server, GitBranch, BookOpen, Zap, AlertCircle } from "lucide-react";
-import { fetchModels, saveServerConfig, fetchServerConfig, fetchDictPrompt, saveDictPrompt, testModelConnection } from "../api";
-import type { ModelInfo, ProviderInfo } from "../api";
+import { X, Loader2, Save, Check, Info, Server, GitBranch, BookOpen, Zap, AlertCircle, KeyRound } from "lucide-react";
+import { fetchModels, fetchSettings, saveSettings, fetchDictPrompt, saveDictPrompt, testModelConnection } from "../api";
+import type { ModelInfo, ProviderInfo, SettingsInfo } from "../api";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { getBranchesCollapsed, setBranchesCollapsed as saveBranchesCollapsed } from "../utils/preferences";
 import "./SettingsModal.css";
@@ -26,6 +26,14 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
     Record<string, { status: "testing" | "ok" | "error"; message: string }>
   >({});
 
+  // Provider / API key state (GET/PUT /api/settings)
+  const [settings, setSettings] = useState<SettingsInfo | null>(null);
+  const [provider, setProvider] = useState("");
+  const [customProvider, setCustomProvider] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [clearKey, setClearKey] = useState(false);
+  const [baseUrl, setBaseUrl] = useState("");
+
   // Dictionary prompt state
   const [dictPrompt, setDictPrompt] = useState("");
   const [dictPromptLoading, setDictPromptLoading] = useState(true);
@@ -38,14 +46,17 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
       try {
         setLoading(true);
         setError(null);
-        const [modelsData, configData] = await Promise.all([
+        const [modelsData, settingsData] = await Promise.all([
           fetchModels(),
-          fetchServerConfig(true),
+          fetchSettings(),
         ]);
         setModels(modelsData.models);
         setProviders(modelsData.providers ?? []);
-        setReadingModel(configData.readingModel || modelsData.currentModel || "");
-        setLookupModel(configData.lookupModel || "");
+        setSettings(settingsData);
+        setProvider(settingsData.provider || "deepseek");
+        setBaseUrl(settingsData.baseUrl ?? "");
+        setReadingModel(settingsData.readingModel || modelsData.currentModel || "");
+        setLookupModel(settingsData.lookupModel || "");
         // Load dictionary prompt template
         try {
           const promptData = await fetchDictPrompt();
@@ -71,6 +82,12 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
     setError(null);
     setSuccess(false);
 
+    const effectiveProvider = (provider === "__custom__" ? customProvider : provider).trim();
+    if (!effectiveProvider) {
+      setError("Please select a provider");
+      setSaving(false);
+      return;
+    }
     if (!readingModel) {
       setError("Please select a reading model");
       setSaving(false);
@@ -78,12 +95,42 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
     }
 
     try {
-      await saveServerConfig({
+      // API key: explicit Clear → ""; typed value → save; blank → echo the
+      // current masked value so the server keeps the stored key.
+      const apiKeyToSend = clearKey
+        ? ""
+        : apiKey.trim()
+          ? apiKey.trim()
+          : settings?.apiKeyMasked
+            ? settings.apiKeyMasked
+            : undefined;
+
+      const update: Parameters<typeof saveSettings>[0] = {
+        provider: effectiveProvider,
         readingModel,
         lookupModel: lookupModel || readingModel,
-      });
+      };
+      if (apiKeyToSend !== undefined) update.apiKey = apiKeyToSend;
+      if (baseUrl.trim() !== (settings?.baseUrl ?? "")) {
+        update.baseUrl = baseUrl.trim();
+      }
+
+      const result = await saveSettings(update);
+      setSettings(result.settings);
+      setProvider(result.settings.provider || "deepseek");
+      setBaseUrl(result.settings.baseUrl ?? "");
+      setApiKey("");
+      setClearKey(false);
+      setReadingModel(result.settings.readingModel);
+      setLookupModel(result.settings.lookupModel);
+
+      // Refresh the model list so the new provider's models appear.
+      const modelsData = await fetchModels();
+      setModels(modelsData.models);
+      setProviders(modelsData.providers ?? []);
+
       setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
+      setTimeout(() => setSuccess(false), 4000);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save configuration");
     } finally {
@@ -104,6 +151,16 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
     (acc[m.provider] ??= []).push(m);
     return acc;
   }, {});
+
+  // Provider dropdown candidates: SDK built-ins ∪ models.json providers ∪
+  // the currently selected one (so a custom provider stays selectable).
+  const providerOptions = [
+    ...new Set([
+      ...(settings?.builtInProviders ?? []),
+      ...(settings?.providers.map((p) => p.name) ?? []),
+      ...(provider && provider !== "__custom__" ? [provider] : []),
+    ]),
+  ].sort();
 
   const handleTestConnection = async (id: string, model: string) => {
     if (!model) return;
@@ -304,23 +361,12 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
 
         <div className="settings-divider" />
 
-        <h3 className="settings-section-title">Default Model</h3>
+        <h3 className="settings-section-title">Model & Provider</h3>
 
         {loading ? (
           <div className="settings-loading">
             <Loader2 size={32} className="spinner" />
             <p>Loading available models…</p>
-          </div>
-        ) : models.length === 0 ? (
-          <div className="settings-info-box">
-            <Info size={16} />
-            <div>
-              <p><strong>No models available.</strong></p>
-              <p style={{ marginTop: 8 }}>
-                Configure a provider via environment variables (<code>PI_PROVIDER</code>, <code>PI_API_KEY</code>, <code>PI_MODEL</code>)
-                or create a <code>models.json</code> file in your data directory.
-              </p>
-            </div>
           </div>
         ) : (
           <form onSubmit={handleSave} className="settings-form">
@@ -334,7 +380,105 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
             {success && (
               <div className="settings-success-alert">
                 <Check size={16} />
-                <span>Default model updated. New sessions will use this model.</span>
+                <span>Configuration saved. New sessions will use it.</span>
+              </div>
+            )}
+
+            {/* ── Provider & API Key ── */}
+            <div className="settings-subsection">
+              <h4 className="settings-subsection-title">
+                <KeyRound size={14} />
+                Provider & API Key
+              </h4>
+
+              <div className="form-group">
+                <label htmlFor="settings-provider">Provider</label>
+                <select
+                  id="settings-provider"
+                  value={provider}
+                  onChange={(e) => setProvider(e.target.value)}
+                >
+                  {!provider && <option value="">Select a provider…</option>}
+                  {providerOptions.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                  <option value="__custom__">Custom…</option>
+                </select>
+                <p className="form-help">
+                  The provider your API key belongs to. Defaults to DeepSeek.
+                </p>
+              </div>
+
+              {provider === "__custom__" && (
+                <div className="form-group">
+                  <label htmlFor="settings-provider-custom">Provider name</label>
+                  <input
+                    id="settings-provider-custom"
+                    type="text"
+                    value={customProvider}
+                    onChange={(e) => setCustomProvider(e.target.value)}
+                    placeholder="my-provider"
+                  />
+                </div>
+              )}
+
+              <div className="form-group">
+                <label htmlFor="settings-api-key">API Key</label>
+                <div className="api-key-row">
+                  <input
+                    id="settings-api-key"
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => {
+                      setApiKey(e.target.value);
+                      if (e.target.value) setClearKey(false);
+                    }}
+                    placeholder={settings?.apiKeyMasked || "sk-…"}
+                    autoComplete="off"
+                  />
+                  {settings?.apiKeyMasked && (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => {
+                        setApiKey("");
+                        setClearKey(true);
+                      }}
+                      title="Remove the stored API key"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <p className="form-help">
+                  {settings?.apiKeyMasked
+                    ? `Stored key: ${settings.apiKeyMasked}. Leave blank to keep it, or type a new key.`
+                    : "Leave blank to keep the current key, or type a new one."}
+                </p>
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="settings-base-url">Base URL</label>
+                <input
+                  id="settings-base-url"
+                  type="text"
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  placeholder="https://api.deepseek.com"
+                />
+                <p className="form-help">
+                  Optional — leave blank to use the provider's built-in default.
+                </p>
+              </div>
+            </div>
+
+            {models.length === 0 && (
+              <div className="settings-info-box">
+                <Info size={16} />
+                <p>
+                  <strong>No models listed yet.</strong> Fill in your provider and
+                  API key above and save — the model list refreshes automatically.
+                </p>
               </div>
             )}
 
@@ -376,8 +520,8 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
               <Info size={16} />
               <p>
                 This sets the default model for new sessions. Individual sessions can override the model
-                via the model picker in the chat input.
-                To add providers or models, edit <code>models.json</code> in your data directory or set environment variables.
+                via the model picker in the chat input. Additional providers can be added through the
+                Provider & API Key section above.
               </p>
             </div>
 

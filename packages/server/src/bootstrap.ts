@@ -1,11 +1,12 @@
 import { join, dirname } from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { app, mountSpaFallback } from "./app.js";
 import { getMcpBridge } from "./services/mcp-bridge.js";
 import { initAgentRegistry, getAgentRegistry } from "./services/agent-registry.js";
 import { setExtensionServices } from "./agents/context.js";
 import { getDb, sources, userSessions, users } from "./db/index.js";
+import { writeJsonAtomic, resetModelsJsonCache } from "./services/models-json.js";
 import { SourceServiceImpl } from "./services/source-service.js";
 import { SessionServiceImpl } from "./services/session-service.js";
 import { UserServiceImpl } from "./services/user-service.js";
@@ -69,6 +70,28 @@ export async function bootstrap(config: BootstrapConfig): Promise<BootstrapResul
 
   // Set DATA_PATH so other modules (config.ts, db, etc.) can read it
   process.env.DATA_PATH = dataPath;
+
+  // First boot: seed $DATA_PATH/models.json with a DeepSeek template
+  // (apiKey blank — the user fills it in the Settings page) so the model
+  // list is non-empty out of the box. Existing files are never touched.
+  const modelsJsonPath = join(dataPath, "models.json");
+  if (!existsSync(modelsJsonPath)) {
+    writeJsonAtomic(modelsJsonPath, {
+      providers: {
+        deepseek: {
+          baseUrl: "https://api.deepseek.com",
+          api: "openai-completions",
+          apiKey: "",
+          models: [
+            { id: "deepseek-v4-flash", reasoning: true },
+            { id: "deepseek-v4-pro", reasoning: true },
+          ],
+        },
+      },
+    });
+    resetModelsJsonCache();
+    console.log(`[bootstrap] Seeded default DeepSeek template at ${modelsJsonPath}`);
+  }
 
   // Initialize MCP bridge — connects to external MCP servers if mcp.json exists.
   // This must happen before extension services are set, so extensions can access

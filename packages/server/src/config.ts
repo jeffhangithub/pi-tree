@@ -51,11 +51,11 @@ export function getServerConfig(): ServerConfigFull {
     readingModel:
       fileConfig.readingModel ||
       process.env.PI_MODEL ||
-      "",
+      DEFAULT_SERVER_CONFIG.readingModel,
     lookupModel:
       fileConfig.lookupModel ||
       process.env.PI_LOOKUP_MODEL ||
-      "",
+      DEFAULT_SERVER_CONFIG.lookupModel,
     dataPath: process.env.DATA_PATH,
     provider:
       fileConfig.provider ||
@@ -162,8 +162,8 @@ export function saveServerConfig(newConfig: Partial<ServerConfigFull>): ServerCo
 
   // 5. Update the dynamic in-memory reference using file overrides and env variables fallback
   _config = {
-    readingModel: toSave.readingModel || process.env.PI_MODEL || "",
-    lookupModel: toSave.lookupModel || process.env.PI_LOOKUP_MODEL || "",
+    readingModel: toSave.readingModel || process.env.PI_MODEL || DEFAULT_SERVER_CONFIG.readingModel,
+    lookupModel: toSave.lookupModel || process.env.PI_LOOKUP_MODEL || DEFAULT_SERVER_CONFIG.lookupModel,
     dataPath: process.env.DATA_PATH,
     provider: toSave.provider || process.env.PI_PROVIDER || "",
     apiKey: toSave.apiKey || process.env.PI_API_KEY || "",

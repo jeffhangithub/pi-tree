@@ -130,7 +130,7 @@ Pi-tree doesn't need frontier-class models — reading and comprehension are mor
 
 | Provider | Model | Notes |
 |----------|-------|-------|
-| DeepSeek | `deepseek-v4-flash` | Very cheap, strong reading comprehension |
+| DeepSeek | `deepseek-v4-flash` | **Default** — very cheap, strong reading comprehension |
 | Google | `gemini-2.5-flash` | Fast, large context window |
 | Anthropic | `claude-haiku-4-20250514` | Fast, great quality-to-cost ratio |
 | Zhipu | `glm-5-turbo` | Good Chinese + English bilingual support |

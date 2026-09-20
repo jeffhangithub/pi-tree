@@ -92,6 +92,63 @@ export async function testModelConnection(model: string): Promise<TestConnection
 }
 
 // ---------------------------------------------------------------------------
+// Settings — provider / API key / base URL configuration
+// ---------------------------------------------------------------------------
+
+export interface SettingsInfo {
+  provider: string;
+  baseUrl: string;
+  api: string;
+  readingModel: string;
+  lookupModel: string;
+  /** Masked API key (e.g. "sk-…abcd"); "" = not configured. Never plaintext. */
+  apiKeyMasked: string;
+  providers: ProviderInfo[];
+  builtInProviders: string[];
+}
+
+export interface SettingsUpdate {
+  provider?: string;
+  /** Plaintext = save; "" = clear; contains "…"/"•" = keep existing; absent = no-op. */
+  apiKey?: string;
+  /** "" = delete the field (fall back to SDK built-in default). */
+  baseUrl?: string;
+  api?: string;
+  readingModel?: string;
+  lookupModel?: string;
+}
+
+export async function fetchSettings(): Promise<SettingsInfo> {
+  const res = await fetch(`${API}/settings`);
+  if (!res.ok) throw new Error(`Failed to fetch settings: ${res.status}`);
+  return res.json();
+}
+
+export async function saveSettings(
+  update: SettingsUpdate,
+): Promise<{ settings: SettingsInfo; sessionsEvicted?: number }> {
+  const res = await fetch(`${API}/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(update),
+  });
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || `Failed to save settings: ${res.status}`);
+  }
+  const data = await res.json();
+  // Keep the shared config cache in sync — model preferences went through
+  // the settings endpoint too.
+  if (data.settings) {
+    _configCache = {
+      readingModel: data.settings.readingModel,
+      lookupModel: data.settings.lookupModel,
+    };
+  }
+  return data;
+}
+
+// ---------------------------------------------------------------------------
 // Users
 // ---------------------------------------------------------------------------
 
