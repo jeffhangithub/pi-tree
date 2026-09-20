@@ -270,12 +270,15 @@ export async function fetchHasAnalysis(sourceId: string): Promise<boolean> {
 
 export async function uploadSource(file: File, meta: {
   title: string; author: string; year?: number;
-}): Promise<Source> {
+}, type?: string): Promise<Source> {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('title', meta.title);
   formData.append('author', meta.author);
   if (meta.year) formData.append('year', String(meta.year));
+  // The server defaults to 'book' when type is absent — always send it
+  // explicitly for non-book uploads (e.g. paper).
+  if (type) formData.append('type', type);
 
   const res = await fetch(`${API}/library/sources`, {
     method: 'POST',

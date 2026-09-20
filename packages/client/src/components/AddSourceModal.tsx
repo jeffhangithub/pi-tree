@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X, Loader2, AlertCircle, ArrowLeft } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { createSource } from "../api";
+import { createSource, uploadSource } from "../api";
 import { SOURCE_TYPE_CONFIGS, type SourceTypeConfig } from "../source-types";
 import "./AddSourceModal.css";
 
@@ -16,23 +16,56 @@ interface GenericFormProps {
 
 function GenericAddSourceForm({ config, sourceType, onSuccess, onError }: GenericFormProps) {
   const [values, setValues] = useState<Record<string, string>>({});
+  const [file, setFile] = useState<File | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const addSource = config.addSource!;
   const fields = useMemo(() => addSource.fields ?? [], [addSource]);
+  const canUpload = addSource.hasFileUpload === true;
+  const acceptedExtensions = useMemo(() => addSource.acceptedExtensions ?? [], [addSource]);
+
   const requiredFields = fields.filter(f => f.required);
   const requiredSatisfied = requiredFields.every(f => values[f.key]?.trim());
-  const canSubmit = !submitting && requiredSatisfied;
+  // The upload endpoint requires title AND author even when the manifest
+  // marks author optional for the metadata-only path.
+  const fileFieldsSatisfied = !file || !!(values.title?.trim() && values.author?.trim());
+  const canSubmit = !submitting && requiredSatisfied && fileFieldsSatisfied;
 
   const setField = useCallback((key: string, value: string) => {
     setValues(prev => ({ ...prev, [key]: value }));
   }, []);
 
+  const handleFile = useCallback((f: File) => {
+    const dot = f.name.lastIndexOf(".");
+    const ext = dot >= 0 ? f.name.slice(dot).toLowerCase() : "";
+    if (acceptedExtensions.length > 0 && !acceptedExtensions.includes(ext)) {
+      onError(`Unsupported format. Please use ${acceptedExtensions.join(", ")}`);
+      return;
+    }
+    setFile(f);
+  }, [acceptedExtensions, onError]);
+
   const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
     setSubmitting(true);
     try {
-      // Collect metadata from fields with metadataKey
+      if (file) {
+        // Multipart upload — the server stores original{ext} and enqueues the
+        // plugin processor for this type. `type` must be sent explicitly
+        // because the upload endpoint defaults to "book".
+        const yearNum = values.year?.trim() ? Number(values.year) : undefined;
+        const created = await uploadSource(file, {
+          title: values.title?.trim() ?? "",
+          author: values.author?.trim() ?? "",
+          ...(yearNum !== undefined && !isNaN(yearNum) ? { year: yearNum } : {}),
+        }, sourceType);
+        onSuccess(created);
+        return;
+      }
+
+      // Metadata-only creation (e.g. paper by arXiv ID).
       const metadata: Record<string, unknown> = {};
       for (const field of fields) {
         if (field.metadataKey && values[field.key]?.trim()) {
@@ -51,10 +84,10 @@ function GenericAddSourceForm({ config, sourceType, onSuccess, onError }: Generi
       onError(err instanceof Error ? err.message : "Creation failed");
       setSubmitting(false);
     }
-  }, [canSubmit, fields, values, sourceType, onSuccess, onError]);
+  }, [canSubmit, fields, values, file, sourceType, onSuccess, onError]);
 
   // If no fields (info-only), show a placeholder
-  if (fields.length === 0) {
+  if (fields.length === 0 && !canUpload) {
     return (
       <div className="add-source-info">
         <p>This source type is managed automatically.</p>
@@ -64,6 +97,39 @@ function GenericAddSourceForm({ config, sourceType, onSuccess, onError }: Generi
 
   return (
     <>
+      {canUpload && (
+        <div
+          className={`add-source-dropzone ${dragOver ? "drag-over" : ""} ${file ? "has-file" : ""}`}
+          onClick={() => fileInputRef.current?.click()}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            const f = e.dataTransfer.files[0];
+            if (f) handleFile(f);
+          }}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={(e) => { e.preventDefault(); setDragOver(false); }}
+        >
+          <div className="add-source-dropzone-icon">
+            {file ? "✓" : "↑"}
+          </div>
+          <span className="add-source-dropzone-text">
+            {file ? file.name : "Drop your file here or click to browse"}
+          </span>
+          {!file && acceptedExtensions.length > 0 && (
+            <span className="add-source-dropzone-hint">
+              {acceptedExtensions.join(", ")}
+            </span>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={acceptedExtensions.join(",")}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
+          />
+        </div>
+      )}
+
       <div className="add-source-form">
         {fields.map(field => (
           <div className="add-source-field" key={field.key}>
@@ -90,7 +156,7 @@ function GenericAddSourceForm({ config, sourceType, onSuccess, onError }: Generi
           {submitting ? (
             <>
               <Loader2 size={18} className="spinner" />
-              Adding…
+              {file ? "Uploading…" : "Adding…"}
             </>
           ) : (
             `Add ${config.label}`

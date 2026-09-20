@@ -17,6 +17,28 @@ AI-assisted academic paper discovery, reading, and analysis using tree-structure
 
 - **arXiv papers** (full support) — search, metadata, full text via ar5iv HTML
 - **Other URLs** (best-effort) — full text via Jina Reader, no structured metadata
+- **Library papers** (uploaded PDF / imported arXiv) — processed into local
+  markdown with a structured table of contents
+
+---
+
+## Reading Library Papers (processed sources)
+
+Papers already in the library have their full text on disk — prefer this over
+network tools when the session is attached to a library source:
+
+1. Read `{sourceId}/analysis/toc.json` — a flat list of `{line, level, title}`
+   entries (plus an optional `page` for PDF sources) mapping section headings
+   to line numbers.
+2. Use the `read` tool on `{sourceId}/markdown/paper.md` with the `offset`
+   parameter set to the toc.json `line` value to jump straight to a section.
+3. `{sourceId}/analysis/page-index.json` (PDF sources) maps PDF pages to
+   markdown line ranges — use it when the user asks about a specific page.
+4. Cite sections by their toc.json heading and line number when answering.
+   Never show raw JSON or internal paths to the user.
+
+The remote tools (`search_papers`, `get_paper_info`, `read_paper`) are for
+discovering and previewing papers that are **not** yet in the library.
 
 ---
 

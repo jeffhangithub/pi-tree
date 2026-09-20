@@ -269,6 +269,10 @@ libraryRoutes.post("/sources/create", async (c) => {
       id = `${baseId}-${suffix}`;
     }
 
+    // If a plugin registered a processor for this type (e.g. the paper plugin),
+    // the source will be processed automatically — mirror the upload path.
+    const willProcess = getJobQueue().hasProcessor(body.type);
+
     const values = {
       id,
       type: body.type,
@@ -276,7 +280,7 @@ libraryRoutes.post("/sources/create", async (c) => {
       author: body.author?.trim() ?? "",
       year: body.year ?? null,
       source: "user" as const,
-      status: "ready" as const,
+      status: willProcess ? ("pending" as const) : ("ready" as const),
       metadata: body.metadata ? JSON.stringify(body.metadata) : null,
       createdAt: now,
       updatedAt: now,
@@ -330,6 +334,15 @@ libraryRoutes.post("/sources/create", async (c) => {
       } catch (err) {
         console.warn(`[sources/create] contentPath not found: ${resolvedPath}`);
       }
+    }
+
+    // Auto-enqueue processing for source types with a registered processor —
+    // e.g. arXiv papers added via the add-source modal or discover. enqueue
+    // only registers the job; the actual processing runs async.
+    if (willProcess) {
+      try {
+        await getJobQueue().enqueue(id);
+      } catch {/* processing failures surface via the job itself */}
     }
 
     return c.json(

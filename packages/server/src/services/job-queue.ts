@@ -136,7 +136,7 @@ export class JobQueue {
     }
   }
 
-  /** Run concept extraction without a processor (for YouTube, Paper, etc.) */
+  /** Run concept extraction without a processor (e.g. YouTube sources). */
   private async runConceptOnlyJob(job: Job, sourceType: string, options?: ProcessOptions): Promise<void> {
     job.status = "processing";
     job.step = "extracting concepts";
@@ -231,8 +231,20 @@ export class JobQueue {
       ].join("\n");
     }
 
-    // Paper: use paper tools
+    // Paper: prefer the ingested pipeline outputs (markdown + toc.json);
+    // fall back to the remote tools for sources without local content.
     if (sourceType === "paper") {
+      const paperMdPath = join(sourceDir, "markdown", "paper.md");
+      if (existsSync(paperMdPath)) {
+        const tocPath = join(sourceDir, "analysis", "toc.json");
+        return [
+          `This is an academic paper. The full text is at ${sourceId}/markdown/paper.md.`,
+          existsSync(tocPath)
+            ? `Section headings with line numbers are at ${sourceId}/analysis/toc.json — use those line numbers as read offsets to navigate the paper.`
+            : null,
+          `Extract concepts from the paper content.`,
+        ].filter(Boolean).join("\n");
+      }
       return [
         `This is an academic paper. Use the read_paper tool with source_id "${sourceId}" to read the paper content.`,
         `If that fails, use get_paper_info to at least get the abstract.`,

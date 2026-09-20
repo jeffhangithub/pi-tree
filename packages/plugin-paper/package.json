@@ -17,13 +17,34 @@
       ],
       "defaultMode": "reading",
       "autoStartMode": "reading",
-      "hasProcessing": false,
+      "hasProcessing": true,
       "concepts": true,
       "searchPlaceholder": "Search papers...",
       "chatPlaceholder": "Search arXiv, paste a paper ID, or ask about research topics…",
       "mentionKeyword": "Paper",
+      "systemContext": [
+        "[INTERNAL CONTEXT — do NOT display this to the user]",
+        "You are in a paper reading session. Use the information below to navigate the paper efficiently.",
+        "Source ID: {sourceId} | Title: {title} | Author: {author}",
+        "",
+        "## Navigation Data (internal — never show raw JSON to user)",
+        "Use these line numbers with the `read` tool's offset parameter to jump to any section:",
+        "{file:analysis/toc.json}",
+        "",
+        "## Resources",
+        "- Paper content (markdown): `{sourceId}/markdown/paper.md`",
+        "- Page index (PDF sources only): `{sourceId}/analysis/page-index.json`",
+        "",
+        "IMPORTANT: When responding to the user, present information conversationally.",
+        "Never dump raw JSON, line numbers, source IDs, or internal data.",
+        "Summarize the table of contents as a readable list if the user asks about paper structure."
+      ],
       "addSource": {
-        "subtitle": "Add a paper to discuss and analyze",
+        "subtitle": "Upload a paper PDF or add it from arXiv",
+        "hasFileUpload": true,
+        "acceptedExtensions": [
+          ".pdf"
+        ],
         "fields": [
           {
             "key": "title",
@@ -44,9 +65,22 @@
           }
         ]
       },
+      "badges": [
+        {
+          "field": "hasMarkdown",
+          "label": "Converted",
+          "color": "green"
+        },
+        {
+          "field": "hasOutline",
+          "label": "Outline",
+          "color": "amber"
+        }
+      ],
       "cardSubtitle": "{author}"
     },
-    "routes": "./routes.ts"
+    "routes": "./routes.ts",
+    "routePrefix": "/api/paper"
   },
   "pi": {
     "extensions": [
@@ -57,8 +91,10 @@
     ]
   },
   "dependencies": {
+    "@hono/node-server": "^1.19.14",
     "@pi-tree/plugin-sdk": "*",
     "hono": "^4.7.0",
+    "pdf-parse": "^2.4.5",
     "typebox": "^1.2.6"
   }
 }
