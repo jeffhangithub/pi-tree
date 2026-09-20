@@ -277,6 +277,11 @@
   --scale-round-y: 1px;
 }
 
+.pdf-page-canvas-host {
+  position: absolute;
+  inset: 0;
+}
+
 .pdf-page-canvas {
   display: block;
   /* Fill the fixed-size wrapper: 1:1 after render, no layout shift while a

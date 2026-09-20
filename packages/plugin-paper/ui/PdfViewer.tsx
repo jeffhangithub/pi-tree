@@ -312,15 +312,17 @@ export default function PdfViewer({
       if (doc) {
         const page = await doc.getPage(1);
         const viewport = page.getViewport({ scale });
+        const dprNow = Math.max(1, window.devicePixelRatio || 1);
         const off = document.createElement("canvas");
-        off.width = canvas.width;
-        off.height = canvas.height;
-        const offScale = canvas.width / Math.max(1, cr.width);
+        // Mirror the viewer's own sizing exactly, otherwise a fractional
+        // difference in the scale factor alone produces full-page AA noise.
+        off.width = Math.max(1, Math.floor(viewport.width * dprNow));
+        off.height = Math.max(1, Math.floor(viewport.height * dprNow));
         await page.render({
           canvas: off,
           viewport,
-          ...(offScale !== 1
-            ? { transform: [offScale, 0, 0, offScale, 0, 0] }
+          ...(dprNow !== 1
+            ? { transform: [dprNow, 0, 0, dprNow, 0, 0] }
             : {}),
         }).promise;
         const a = canvas.getContext("2d")?.getImageData(0, 0, canvas.width, canvas.height).data;
@@ -340,7 +342,11 @@ export default function PdfViewer({
       pageDiff = "err";
     }
     setDiag(
-      `dpr=${window.devicePixelRatio} canvas=${canvas.width}x${canvas.height} css=${Math.round(cr.width)}x${Math.round(cr.height)} ratio=${ratio} color=${color} fs=${fontSize} spans=${spans.length} overlap=${sig} ink=${ink} pageDiff=${pageDiff} zoom=${Math.round(scale * 100)}% | pages=${document.querySelectorAll(".pdf-page").length} canvases=${document.querySelectorAll(".pdf-page canvas").length} boxOverlaps=${(() => {        const boxes = Array.from(document.querySelectorAll(".pdf-page")).map((el) => el.getBoundingClientRect());
+      `dpr=${window.devicePixelRatio} canvas=${canvas.width}x${canvas.height} css=${Math.round(cr.width)}x${Math.round(cr.height)} ratio=${ratio} canvasScale=${(() => {
+        const pageWidth = pages[0]?.width;
+        if (!pageWidth) return "n/a";
+        return (canvas.width / ((window.devicePixelRatio || 1) * pageWidth)).toFixed(3);
+      })()} stateScale=${scale.toFixed(3)} color=${color} fs=${fontSize} spans=${spans.length} overlap=${sig} ink=${ink} pageDiff=${pageDiff} zoom=${Math.round(scale * 100)}% | pages=${document.querySelectorAll(".pdf-page").length} canvases=${document.querySelectorAll(".pdf-page canvas").length} boxOverlaps=${(() => {        const boxes = Array.from(document.querySelectorAll(".pdf-page")).map((el) => el.getBoundingClientRect());
         let n = 0;
         for (let i = 0; i < boxes.length; i++) {
           for (let j = i + 1; j < boxes.length; j++) {
@@ -478,7 +484,12 @@ function PdfPage({
   onTextStatus,
 }: PdfPageProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  /**
+   * Host for the page canvas. The canvas itself is created per render and
+   * swapped in atomically, so a cancelled render can never leave a stale
+   * frame under the new one.
+   */
+  const canvasHostRef = useRef<HTMLDivElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
   const highlightOverlayRef = useRef<HTMLDivElement>(null);
   const [shouldRender, setShouldRender] = useState(false);
@@ -558,8 +569,12 @@ function PdfPage({
     return () => observer.disconnect();
   }, []);
 
-  // Canvas + text layer. Cleanup cancels both tasks and resets the canvas,
-  // which keeps React 19 StrictMode double-effects and zoom re-renders safe.
+  // Canvas + text layer. Every render builds BOTH layers offscreen and swaps
+  // them in atomically: pdf.js paints in async chunks, so a cancelled task can
+  // still land chunks on its canvas — reusing one canvas across zoom levels
+  // leaves a stale frame ghosting under the new one (visible doubled text).
+  // The visible layers therefore keep the previous frame until the new one is
+  // complete, then are replaced in a single step.
   useEffect(() => {
     if (!shouldRender) return;
     let cancelled = false;
@@ -567,21 +582,16 @@ function PdfPage({
     let textLayer: TextLayerType | null = null;
 
     const wrapper = wrapperRef.current;
-    const canvas = canvasRef.current;
-    const textLayerDiv = textLayerRef.current;
-    if (!wrapper || !canvas || !textLayerDiv) return;
-
-    // pdf.js v5 positions text-layer spans as a % of the layer and sizes the
-    // glyphs with `calc(var(--text-scale-factor) * var(--font-height))`, where
-    // --text-scale-factor = --total-scale-factor * --min-font-size (see
-    // PdfPanel.css). Set it DIRECTLY to the active scale on the page wrapper:
-    // the pdf.js `.pdfViewer .page` rule that computes it from --user-unit
-    // never applies to our markup, and an unresolved value leaves the spans at
-    // the app's inherited font-size (overlapping text, garbled selection).
-    wrapper.style.setProperty("--total-scale-factor", String(scale));
-    wrapper.style.setProperty("--scale-factor", String(scale));
+    const canvasHost = canvasHostRef.current;
+    const textLayerHost = textLayerRef.current;
+    if (!wrapper || !canvasHost || !textLayerHost) return;
 
     (async () => {
+      const nextCanvas = document.createElement("canvas");
+      nextCanvas.className = "pdf-page-canvas";
+      const nextLayer = document.createElement("div");
+      nextLayer.className = "pdf-page-text-layer textLayer";
+
       try {
         const page = await doc.getPage(info.pageNumber);
         if (cancelled) return;
@@ -589,13 +599,24 @@ function PdfPage({
         // Render at the display's device pixel ratio so text stays crisp on
         // HiDPI screens; the CSS box stays at viewport size in CSS pixels.
         const outputScale = Math.max(1, window.devicePixelRatio || 1);
-        canvas.width = Math.max(1, Math.floor(viewport.width * outputScale));
-        canvas.height = Math.max(1, Math.floor(viewport.height * outputScale));
-        canvas.style.width = `${Math.max(1, Math.floor(viewport.width))}px`;
-        canvas.style.height = `${Math.max(1, Math.floor(viewport.height))}px`;
+        const cssWidth = Math.max(1, Math.floor(viewport.width));
+        const cssHeight = Math.max(1, Math.floor(viewport.height));
+        nextCanvas.width = Math.max(1, Math.floor(viewport.width * outputScale));
+        nextCanvas.height = Math.max(1, Math.floor(viewport.height * outputScale));
+        nextCanvas.style.width = `${cssWidth}px`;
+        nextCanvas.style.height = `${cssHeight}px`;
+        // The offscreen layer carries its own copy of the scale variables so
+        // its spans are measured at the NEW scale while the visible layer
+        // still renders at the old one (pdf.js v5 sizes glyphs from
+        // --text-scale-factor = --total-scale-factor * --min-font-size).
+        nextLayer.style.width = `${cssWidth}px`;
+        nextLayer.style.height = `${cssHeight}px`;
+        nextLayer.style.setProperty("--total-scale-factor", String(scale));
+        nextLayer.style.setProperty("--scale-factor", String(scale));
+
         // v5: pass the canvas element (canvasContext is legacy/optional).
         renderTask = page.render({
-          canvas,
+          canvas: nextCanvas,
           viewport,
           ...(outputScale !== 1
             ? { transform: [outputScale, 0, 0, outputScale, 0, 0] }
@@ -603,11 +624,18 @@ function PdfPage({
         });
         textLayer = new TextLayer({
           textContentSource: page.streamTextContent(),
-          container: textLayerDiv,
+          container: nextLayer,
           viewport,
         });
         await Promise.all([renderTask.promise, textLayer.render()]);
         if (cancelled) return;
+
+        // Atomic swap: the scale variables and both layers change together.
+        wrapper.style.setProperty("--total-scale-factor", String(scale));
+        wrapper.style.setProperty("--scale-factor", String(scale));
+        canvasHost.replaceChildren(nextCanvas);
+        textLayerHost.replaceChildren(...Array.from(nextLayer.childNodes));
+
         setRenderFailed(false);
         applyHighlightOverlay();
         const hasText =
@@ -626,10 +654,6 @@ function PdfPage({
       cancelled = true;
       renderTask?.cancel();
       textLayer?.cancel();
-      textLayerDiv.replaceChildren();
-      highlightOverlayRef.current?.replaceChildren();
-      canvas.width = 0;
-      canvas.height = 0;
     };
   }, [doc, info.pageNumber, scale, shouldRender, onTextStatus, applyHighlightOverlay]);
 
@@ -641,7 +665,7 @@ function PdfPage({
       data-section={section}
       style={{ width, height }}
     >
-      <canvas ref={canvasRef} className="pdf-page-canvas" />
+      <div ref={canvasHostRef} className="pdf-page-canvas-host" />
       <div ref={textLayerRef} className="pdf-page-text-layer textLayer" />
       <div ref={highlightOverlayRef} className="pdf-page-highlights" />
       {renderFailed && (
