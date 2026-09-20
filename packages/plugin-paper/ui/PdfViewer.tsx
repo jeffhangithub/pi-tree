@@ -360,7 +360,7 @@ export default function PdfViewer({
       pageDiff = "err";
     }
     setDiag(
-      `dpr=${window.devicePixelRatio} bitmap=${bitmapWidth}x${bitmapHeight} css=${Math.round(cr.width)}x${Math.round(cr.height)} ratio=${ratio} canvasScale=${(() => {
+      `build=R5 dpr=${window.devicePixelRatio} bitmap=${bitmapWidth}x${bitmapHeight} css=${Math.round(cr.width)}x${Math.round(cr.height)} ratio=${ratio} canvasScale=${(() => {
         const pageWidth = pages[0]?.width;
         if (!pageWidth) return "n/a";
         return (bitmapWidth / ((window.devicePixelRatio || 1) * pageWidth)).toFixed(3);
@@ -405,6 +405,9 @@ export default function PdfViewer({
         .join(" ")}
     >
       <div className="pdf-viewer-toolbar">
+        <span className="pdf-viewer-build-tag" title="渲染修复版本标记">
+          R5
+        </span>
         <span className="pdf-viewer-page-indicator">
           {pages.length > 0 ? `${currentPage} / ${pages.length}` : "– / –"}
         </span>
