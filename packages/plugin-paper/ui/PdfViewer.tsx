@@ -252,14 +252,28 @@ export default function PdfViewer({
   const [hideLayer, setHideLayer] = useState(false);
   const runDiagnostics = useCallback(async () => {
     const wrapper = scrollRef.current?.querySelector(".pdf-page") as HTMLElement | null;
-    const canvas = wrapper?.querySelector("canvas") as HTMLCanvasElement | null;
     const layer = wrapper?.querySelector(".pdf-page-text-layer") as HTMLElement | null;
-    if (!wrapper || !canvas || !layer) {
+    const displayed = wrapper?.querySelector(
+      "img.pdf-page-canvas, canvas.pdf-page-canvas",
+    ) as HTMLImageElement | HTMLCanvasElement | null;
+    if (!wrapper || !displayed || !layer) {
       setDiag("诊断:未找到已渲染页面(请先让 PDF 显示出来)");
       return;
     }
-    const cr = canvas.getBoundingClientRect();
-    const ratio = +(canvas.width / Math.max(1, cr.width)).toFixed(3);
+    // The page is displayed as a PNG <img>; read its bitmap through a probe
+    // canvas so every measurement stays comparable to a live canvas.
+    const bitmapWidth =
+      displayed instanceof HTMLImageElement ? displayed.naturalWidth : displayed.width;
+    const bitmapHeight =
+      displayed instanceof HTMLImageElement ? displayed.naturalHeight : displayed.height;
+    const probe = document.createElement("canvas");
+    probe.width = Math.max(1, bitmapWidth);
+    probe.height = Math.max(1, bitmapHeight);
+    const probeCtx = probe.getContext("2d");
+    let canvas = probe;
+    if (probeCtx) probeCtx.drawImage(displayed, 0, 0);
+    const cr = displayed.getBoundingClientRect();
+    const ratio = +(bitmapWidth / Math.max(1, cr.width)).toFixed(3);
     const spans = Array.from(layer.querySelectorAll("span")).filter(
       (s) => (s.textContent ?? "").trim().length > 0,
     ) as HTMLElement[];
@@ -346,10 +360,10 @@ export default function PdfViewer({
       pageDiff = "err";
     }
     setDiag(
-      `dpr=${window.devicePixelRatio} canvas=${canvas.width}x${canvas.height} css=${Math.round(cr.width)}x${Math.round(cr.height)} ratio=${ratio} canvasScale=${(() => {
+      `dpr=${window.devicePixelRatio} bitmap=${bitmapWidth}x${bitmapHeight} css=${Math.round(cr.width)}x${Math.round(cr.height)} ratio=${ratio} canvasScale=${(() => {
         const pageWidth = pages[0]?.width;
         if (!pageWidth) return "n/a";
-        return (canvas.width / ((window.devicePixelRatio || 1) * pageWidth)).toFixed(3);
+        return (bitmapWidth / ((window.devicePixelRatio || 1) * pageWidth)).toFixed(3);
       })()} stateScale=${scale.toFixed(3)} color=${color} fs=${fontSize} spans=${spans.length} overlap=${sig} ink=${ink} pageDiff=${pageDiff} zoom=${Math.round(scale * 100)}% | pages=${document.querySelectorAll(".pdf-page").length} canvases=${document.querySelectorAll(".pdf-page canvas").length} boxOverlaps=${(() => {        const boxes = Array.from(document.querySelectorAll(".pdf-page")).map((el) => el.getBoundingClientRect());
         let n = 0;
         for (let i = 0; i < boxes.length; i++) {
@@ -520,6 +534,8 @@ function PdfPage({
   const canvasHostRef = useRef<HTMLDivElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
   const highlightOverlayRef = useRef<HTMLDivElement>(null);
+  /** Offscreen canvas that produced the shown PNG; kept for diagnostics. */
+  const lastCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [shouldRender, setShouldRender] = useState(false);
   const [renderFailed, setRenderFailed] = useState(false);
 
@@ -659,9 +675,22 @@ function PdfPage({
         if (cancelled) return;
 
         // Atomic swap: the scale variables and both layers change together.
+        // The page is displayed as a PNG <img> rather than a live <canvas>:
+        // some macOS/Chrome GPU combinations composite a canvas twice when it
+        // is repainted at fractional scales, which shows as doubled text that
+        // no bitmap-level check can see. Images use the normal image pipeline.
+        const img = document.createElement("img");
+        img.className = "pdf-page-canvas";
+        img.alt = "";
+        img.draggable = false;
+        img.src = nextCanvas.toDataURL("image/png");
+        img.style.width = `${cssWidth}px`;
+        img.style.height = `${cssHeight}px`;
+        lastCanvasRef.current = nextCanvas;
+
         wrapper.style.setProperty("--total-scale-factor", String(scale));
         wrapper.style.setProperty("--scale-factor", String(scale));
-        canvasHost.replaceChildren(nextCanvas);
+        canvasHost.replaceChildren(img);
         textLayerHost.replaceChildren(...Array.from(nextLayer.childNodes));
 
         setRenderFailed(false);
