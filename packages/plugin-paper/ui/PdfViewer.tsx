@@ -448,10 +448,21 @@ function PdfPage({
         const page = await doc.getPage(info.pageNumber);
         if (cancelled) return;
         const viewport = page.getViewport({ scale });
-        canvas.width = Math.max(1, Math.floor(viewport.width));
-        canvas.height = Math.max(1, Math.floor(viewport.height));
+        // Render at the display's device pixel ratio so text stays crisp on
+        // HiDPI screens; the CSS box stays at viewport size in CSS pixels.
+        const outputScale = Math.max(1, window.devicePixelRatio || 1);
+        canvas.width = Math.max(1, Math.floor(viewport.width * outputScale));
+        canvas.height = Math.max(1, Math.floor(viewport.height * outputScale));
+        canvas.style.width = `${Math.max(1, Math.floor(viewport.width))}px`;
+        canvas.style.height = `${Math.max(1, Math.floor(viewport.height))}px`;
         // v5: pass the canvas element (canvasContext is legacy/optional).
-        renderTask = page.render({ canvas, viewport });
+        renderTask = page.render({
+          canvas,
+          viewport,
+          ...(outputScale !== 1
+            ? { transform: [outputScale, 0, 0, outputScale, 0, 0] }
+            : {}),
+        });
         textLayer = new TextLayer({
           textContentSource: page.streamTextContent(),
           container: textLayerDiv,
