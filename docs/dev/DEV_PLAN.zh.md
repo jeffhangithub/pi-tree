@@ -3,6 +3,7 @@
 > 分析日期:2026-09-19 · 基线版本:v0.3.3(commit 3cf6ee9)· 仓库:https://github.com/shuowu/pi-tree
 > 目标:基于 pi-tree 继续开发 —— **真 PDF 渲染显示论文原文(嵌入开源方案)、划词/划章节提问、回答中追问、理解后返回上一层、AI 回复默认语言用户可选、设置页配置 API Key(默认 DeepSeek)**。
 > **第一阶段架构要求(2026-09-20 修订)**:每个提问节点保存**原文锚点(页码 + 文本选区 + 章节)**,点击历史节点同时恢复问答上下文并**跳回 PDF 对应位置**;阅读记录从第一天起采用**可导出的可移植格式**,不绑定 pi-tree 数据库。
+> **多源回答要求(2026-09-20 新增)**:针对论文文字/章节的问答,**答案不全部来自论文本身**,由三层构成——①论文内证据(章节/行号)② LLM 原理性解释(标注"通用原理")③外部互联网可信数据源(原理、著作、分析解释,带出处链接);依托 pi-tree 自带 MCP 桥接入,逐句标注来源类别,论文观点与外部解释不混淆。
 > **第二阶段**:把"对话树核心 + 原文锚点"拆成独立共享模块,开发 **Zotero 插件**(pi-tree 作为第一版验证平台,不把 Electron 应用硬塞进 Zotero)。见 §5。
 
 > 需求最终确认(2026-09-19):
@@ -131,12 +132,18 @@ packages/
 4. **安全约束**:日志不打印 key;GET 接口掩码;PUT 响应不含 key。
 - **验收**:全新环境仅通过设置页填 DeepSeek key → 新建会话正常问答;界面只显示尾 4 位;重启服务后配置保留。
 
-### Phase 2 — AI 回复默认语言用户可选(1 天)
+### Phase 2 — AI 回答策略:语言可选 + 多源回答(1-1.5 天)
 1. **skill 语言策略**(基础):`paper-reading/SKILL.md` 增加语言规则——"回答语言遵循用户设置的偏好;用户显式要求其他语言时以用户为准;术语保留英文原文并附中文释义"。
-2. **设置页语言偏好**(必做):SettingsModal 增加"回复语言"选项——**跟随提问 / 中文 / English / 日本語 / Deutsch / Français**(跟随提问为默认),存 `$DATA_PATH/models.json` 或独立 settings,服务端读取后注入会话 systemContext("Always answer in {lang} unless the user explicitly asks otherwise")。
-3. **会话内快捷切换**(小):Reader 会话头部下拉同步该偏好(与会话绑定,覆盖全局默认)——几十行 UI,可选但建议做。
-4. **模型建议**(文档化):DeepSeek(便宜、中文强)/ glm-5-turbo(双语)/ 本地 Qwen(离线),复用现有 provider 体系,无需开发。
-- **验收**:设置"中文"后,英文提问也回中文;"跟随提问"下中英提问各回各语言;会话内切换即时生效。
+2. **多源回答策略**(新增,写进 SKILL.md):
+   - 三层来源:①论文内证据(章节+行号,agentic read 引用)②原理性解释(LLM 知识,注明"[原理]")③外部可信源(经 MCP 工具检索,带 URL/出处);
+   - 来源标注格式:`[论文 §3.2 L45]` / `[原理]` / `[arXiv:…]` / `[URL]`;关键论断逐句标注;
+   - 可信源白名单:arXiv / Semantic Scholar 优先,百科类标"二手来源",低可信来源不进答案;
+   - 禁止把 LLM 推测冒充论文结论。
+3. **外部源接入**:启用 pi-tree MCP 桥(`config/mcp.json`),配置 1-2 个可信源——网页搜索(如 Tavily/Brave)与学术库(arXiv/Semantic Scholar);确认 paper profile 的 `extensions: [paper, mcp, memos]` 已包含 mcp,并验证 AI 能调用检索工具。
+4. **设置页语言偏好**(必做):SettingsModal 增加"回复语言"选项——**跟随提问 / 中文 / English / 日本語 / Deutsch / Français**(跟随提问为默认),存 `$DATA_PATH/models.json` 或独立 settings,服务端读取后注入会话 systemContext("Always answer in {lang} unless the user explicitly asks otherwise")。
+5. **会话内快捷切换**(小):Reader 会话头部下拉同步该偏好(与会话绑定,覆盖全局默认)——几十行 UI,可选但建议做。
+6. **模型建议**(文档化):DeepSeek(便宜、中文强)/ glm-5-turbo(双语)/ 本地 Qwen(离线),复用现有 provider 体系,无需开发。
+- **验收**:设置"中文"后英文提问也回中文;"跟随提问"下中英各回各语言;提问一个概念,回答同时含论文内引用(带行号)+ 原理性解释 + 至少一个带 URL 的外部来源,且来源类别标注清晰、不与论文观点混淆。
 
 ### Phase 3 — paper 结构化管道 + 原 PDF 留存(3-4 天)
 1. **sourceType 升级**:`hasProcessing: true`;addSource 增加 **PDF 文件上传** + arXiv URL/ID 字段(保留现有 arxivId)。
@@ -186,7 +193,7 @@ packages/
 |---|---|---|---|
 | P0 | 环境基线 | 0.5 天 | - |
 | P1 | 设置页 API Key(默认 DeepSeek) | 1.5-2 天 | P0 |
-| P2 | AI 回复默认语言可选 | 1 天 | P0 |
+| P2 | AI 回答策略(语言可选 + 多源回答) | 1-1.5 天 | P0 |
 | P3 | paper 管道 + 原 PDF 留存 + 文件服务 | 3-4 天 | P0 |
 | P4 | 真 PDF 渲染面板 + 锚点采集 | 3-5 天 | P3 |
 | P5 | 划词/划章节提问 + 锚点回跳 + 阅读记录导出 | 2-3 天 | P2+P4 |
@@ -198,8 +205,9 @@ packages/
 1. **PDF 渲染方案**:方案 A(pdfjs-dist 自研薄封装,推荐)vs 方案 B(react-pdf)。已倾向 A,开工前最终拍板。
 2. **回复语言偏好粒度**:仅全局设置 vs 全局+会话内切换(建议后者,成本 +0.5 天)。
 3. **锚点存储位置**:节点 metadata(不侵入 Pi SDK)vs 旁路表(锚点与树分离,导出更易)。建议先 metadata,导出层统一映射。
-4. **上游策略**:纯 fork 独立演进 vs fork+定期同步。建议后者。
-5. **部署形态**:Docker / 源码 / Electron 桌面?影响 P6 验证面,不影响主体开发。
+4. **可信源清单**:MCP 接哪些源(建议 Tavily/Brave 搜索 + arXiv/Semantic Scholar 学术库),是否允许百科(标二手)。开工 P2 前定。
+5. **上游策略**:纯 fork 独立演进 vs fork+定期同步。建议后者。
+6. **部署形态**:Docker / 源码 / Electron 桌面?影响 P6 验证面,不影响主体开发。
 
 ---
 
